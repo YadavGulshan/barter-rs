@@ -35,11 +35,14 @@ use itertools::Itertools;
 use std::fmt::Debug;
 use tracing::error;
 
+mod action;
+mod action_other;
 pub mod audit;
 pub mod command;
 pub mod error;
 pub mod execution_tx;
 pub mod state;
+mod v2;
 
 pub trait Processor<Event> {
     type Output;
@@ -366,8 +369,8 @@ where
 
     pub fn cancel_order_by_id(
         &mut self,
-        _instrument: &InstrumentKey,
-        _id: &OrderId,
+        instrument: &InstrumentKey,
+        id: &OrderId,
     ) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
         // Todo: this evenings plan:
         //  1. Implement CancelAllOrders & CancelOrderById
@@ -376,12 +379,19 @@ where
         // Todo: Open Q:
         // - Maybe CancelAllOrders, etc, should only be accessible via Command to keep audit flow
         //   in tact?
+        // - Each method could have it's own custom Audit, with some parent enum
+        //  eg/ CommandAudit::CancelAllOrders, etc. TradeAudit (mirror engine)
+
+        // For extendability, each piece of functionality could be a trait that the Engine
+        // implements. eg/ trait CancelAllOrders, CancelOrderById, each with an Audit
 
         todo!()
         // self.execution_tx.send(ExecutionRequest::CancelOrder(RequestCancel::new(instrument, id)))
     }
 
     pub fn cancel_all_orders(&mut self) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
+        // self.state.instruments
+
         todo!()
     }
 

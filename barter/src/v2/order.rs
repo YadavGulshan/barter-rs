@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use derive_more::{Constructor, Display, From};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use smol_str::SmolStr;
 use uuid::Uuid;
 
 #[derive(
@@ -37,7 +38,7 @@ pub struct ClientOrderId<T = Uuid>(pub T);
     From,
     Constructor,
 )]
-pub struct OrderId<T = String>(pub T);
+pub struct OrderId<T = SmolStr>(pub T);
 
 #[derive(
     Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize, Constructor,
