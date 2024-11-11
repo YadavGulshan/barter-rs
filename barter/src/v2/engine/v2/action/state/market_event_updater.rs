@@ -6,10 +6,7 @@ use crate::v2::engine::{
     },
     Processor,
 };
-use barter_data::{
-    event::{DataKind, MarketEvent},
-    streams::consumer::MarketStreamEvent,
-};
+use barter_data::{event::MarketEvent, streams::consumer::MarketStreamEvent};
 use barter_instrument::exchange::ExchangeId;
 use tracing::warn;
 

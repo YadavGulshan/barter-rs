@@ -10,6 +10,7 @@ use crate::v2::{
         Processor,
     },
     execution::{manager::AccountStreamEvent, AccountEvent, AccountEventKind},
+    order::{Order, RequestCancel, RequestOpen},
     Snapshot,
 };
 use barter_data::{event::MarketEvent, streams::consumer::MarketStreamEvent};
@@ -60,6 +61,42 @@ pub struct EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, Instrument
 impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
     EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
 {
+    pub fn record_in_flight_cancels<'a>(
+        &mut self,
+        cancels: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestCancel>>,
+    ) where
+        Self: StateManager<
+            InstrumentKey,
+            State = InstrumentState<Market, ExchangeKey, AssetKey, InstrumentKey>,
+        >,
+        ExchangeKey: Debug + Clone + 'a,
+        InstrumentKey: Debug + Clone + 'a,
+    {
+        for request in cancels.into_iter() {
+            self.state_mut(&request.instrument)
+                .orders
+                .record_in_flight_cancel(request);
+        }
+    }
+
+    pub fn record_in_flight_opens<'a>(
+        &mut self,
+        opens: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestOpen>>,
+    ) where
+        Self: StateManager<
+            InstrumentKey,
+            State = InstrumentState<Market, ExchangeKey, AssetKey, InstrumentKey>,
+        >,
+        ExchangeKey: Debug + Clone + 'a,
+        InstrumentKey: Debug + Clone + 'a,
+    {
+        for request in opens.into_iter() {
+            self.state_mut(&request.instrument)
+                .orders
+                .record_in_flight_open(request);
+        }
+    }
+
     pub fn update_from_trading_state_update(&mut self, event: &TradingState) {
         let next = match (self.trading, event) {
             (TradingState::Enabled, TradingState::Disabled) => {

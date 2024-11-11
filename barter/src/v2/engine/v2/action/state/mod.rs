@@ -1,5 +1,7 @@
 mod market_event_updater;
+mod orders_in_flight_recorder;
 pub mod trading_state_updater;
+
 // Todo: I think ultimately this module "state" would actually be at equal level to "action",
 //     ie/ an Engine "actions", but State "updates"
 //   '--> Actions generate Outputs, Updaters generate Audits???

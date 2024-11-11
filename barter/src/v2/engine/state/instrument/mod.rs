@@ -22,6 +22,28 @@ pub struct InstrumentStates<Market, ExchangeKey, AssetKey, InstrumentKey>(
     >,
 );
 
+impl<Market, ExchangeKey, AssetKey, InstrumentKey>
+    InstrumentStates<Market, ExchangeKey, AssetKey, InstrumentKey>
+{
+    pub fn states(
+        &self,
+    ) -> impl Iterator<Item = &InstrumentState<Market, ExchangeKey, AssetKey, InstrumentKey>> {
+        self.0.values()
+    }
+
+    pub fn states_by_exchange<'a>(
+        &'a self,
+        exchange: &'a ExchangeKey,
+    ) -> impl Iterator<Item = &InstrumentState<Market, ExchangeKey, AssetKey, InstrumentKey>>
+    where
+        ExchangeKey: PartialEq + 'a,
+    {
+        self.0
+            .values()
+            .filter(|state| state.instrument.exchange == *exchange)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Constructor)]
 pub struct InstrumentState<Market, ExchangeKey, AssetKey, InstrumentKey> {
     pub instrument: Instrument<ExchangeKey, AssetKey>,

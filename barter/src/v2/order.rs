@@ -63,7 +63,7 @@ impl InternalOrderState {
         match self {
             InternalOrderState::OpenInFlight(_) => None,
             InternalOrderState::Open(state) => Some(state.id.clone()),
-            InternalOrderState::CancelInFlight(state) => Some(state.id.clone()),
+            InternalOrderState::CancelInFlight(state) => state.id.clone(),
         }
     }
 
@@ -72,6 +72,38 @@ impl InternalOrderState {
             self,
             InternalOrderState::OpenInFlight(_) | InternalOrderState::Open(_)
         )
+    }
+}
+
+impl<ExchangeKey, InstrumentKey> Order<ExchangeKey, InstrumentKey, InternalOrderState> {
+    pub fn as_request_cancel(&self) -> Option<Order<ExchangeKey, InstrumentKey, RequestCancel>>
+    where
+        ExchangeKey: Clone,
+        InstrumentKey: Clone,
+    {
+        let Order {
+            exchange,
+            instrument,
+            cid,
+            side,
+            state,
+        } = self;
+
+        let request_cancel = match state {
+            InternalOrderState::OpenInFlight(_) => RequestCancel { id: None },
+            InternalOrderState::Open(open) => RequestCancel {
+                id: Some(open.id.clone()),
+            },
+            _ => return None,
+        };
+
+        Some(Order {
+            exchange: exchange.clone(),
+            instrument: instrument.clone(),
+            cid: *cid,
+            side: *side,
+            state: request_cancel,
+        })
     }
 }
 
@@ -112,7 +144,7 @@ pub enum TimeInForce {
     Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize, Constructor,
 )]
 pub struct RequestCancel {
-    pub id: OrderId,
+    pub id: Option<OrderId>,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
@@ -138,7 +170,7 @@ pub struct OpenRejectedReason(pub String);
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
 pub struct CancelInFlight {
-    pub id: OrderId,
+    pub id: Option<OrderId>,
 }
 
 #[derive(
