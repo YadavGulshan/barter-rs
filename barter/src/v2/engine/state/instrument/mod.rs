@@ -1,5 +1,8 @@
 use crate::v2::{
-    engine::state::order_manager::Orders,
+    engine::{
+        command::InstrumentFilter,
+        state::{order_manager::Orders, StateManager},
+    },
     execution::InstrumentAccountSnapshot,
     order::{Open, Order},
     position::Position,
@@ -9,6 +12,7 @@ use crate::v2::{
 use barter_instrument::instrument::{name::InstrumentNameInternal, Instrument};
 use derive_more::Constructor;
 use indexmap::IndexMap;
+use itertools::Either;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
@@ -25,22 +29,27 @@ pub struct InstrumentStates<Market, ExchangeKey, AssetKey, InstrumentKey>(
 impl<Market, ExchangeKey, AssetKey, InstrumentKey>
     InstrumentStates<Market, ExchangeKey, AssetKey, InstrumentKey>
 {
-    pub fn states(
-        &self,
-    ) -> impl Iterator<Item = &InstrumentState<Market, ExchangeKey, AssetKey, InstrumentKey>> {
-        self.0.values()
-    }
-
-    pub fn states_by_exchange<'a>(
+    pub fn states_by_filter<'a>(
         &'a self,
-        exchange: &'a ExchangeKey,
+        filter: &'a InstrumentFilter<ExchangeKey, InstrumentKey>,
     ) -> impl Iterator<Item = &InstrumentState<Market, ExchangeKey, AssetKey, InstrumentKey>>
     where
         ExchangeKey: PartialEq + 'a,
+        InstrumentKey: PartialEq + 'a,
     {
-        self.0
-            .values()
-            .filter(|state| state.instrument.exchange == *exchange)
+        match filter {
+            InstrumentFilter::None => Either::Left(Either::Left(self.0.values())),
+            InstrumentFilter::Exchanges(exchanges) => Either::Left(Either::Right(
+                self.0
+                    .values()
+                    .filter(|state| exchanges.contains(&state.instrument.exchange)),
+            )),
+            InstrumentFilter::Instruments(instruments) => Either::Right(
+                self.0
+                    .values()
+                    .filter(|state| instruments.contains(&state.position.instrument)),
+            ),
+        }
     }
 }
 

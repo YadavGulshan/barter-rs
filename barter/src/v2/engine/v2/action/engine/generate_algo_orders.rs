@@ -3,7 +3,7 @@ use crate::v2::{
         execution_tx::ExecutionTxMap,
         state::{instrument::InstrumentState, EngineState, StateManager},
         v2::{
-            action::engine::{send_requests, SendRequestsOutput},
+            action::engine::{send_requests, send_requests::SendRequestsOutput},
             Engine,
         },
     },
@@ -15,7 +15,6 @@ use barter_integration::collection::none_one_or_many::NoneOneOrMany;
 use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-
 // Todo: - AlgoStrategy would maybe live in here, like CloseAllPositions, etc.
 
 pub trait GenerateAlgoOrders<ExchangeKey, InstrumentKey> {
@@ -35,7 +34,7 @@ pub struct GenerateAlgoOrdersOutput<ExchangeKey, InstrumentKey> {
     pub opens_refused: NoneOneOrMany<RiskRefused<Order<ExchangeKey, InstrumentKey, RequestOpen>>>,
 }
 
-impl<MarketState, StrategyT, Risk, ExchangeKey, AssetKey, InstrumentKey>
+impl<MarketState, StrategyT, Risk, ExecutionTxs, ExchangeKey, AssetKey, InstrumentKey>
     GenerateAlgoOrders<ExchangeKey, InstrumentKey>
     for Engine<
         EngineState<
@@ -48,10 +47,12 @@ impl<MarketState, StrategyT, Risk, ExchangeKey, AssetKey, InstrumentKey>
         >,
         StrategyT,
         Risk,
+        ExecutionTxs,
     >
 where
     StrategyT: Strategy<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
     Risk: RiskManager<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
+    ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
     ExchangeKey: Debug + Clone,
     InstrumentKey: Debug + Clone,
     EngineState<MarketState, StrategyT::State, Risk::State, ExchangeKey, AssetKey, InstrumentKey>:
@@ -83,8 +84,12 @@ where
         );
 
         // Send risk approved order requests
-        let cancels = send_requests(txs, cancels.into_iter().map(|RiskApproved(cancel)| cancel));
-        let opens = send_requests(txs, opens.into_iter().map(|RiskApproved(open)| open));
+        let cancels = send_requests::send_requests(
+            txs,
+            cancels.into_iter().map(|RiskApproved(cancel)| cancel),
+        );
+        let opens =
+            send_requests::send_requests(txs, opens.into_iter().map(|RiskApproved(open)| open));
 
         // Collect remaining Iterators (so we can access &mut self)
         let cancels_refused = refused_cancels.into_iter().collect();

@@ -258,33 +258,36 @@ where
         &mut self,
         command: &Command<ExchangeKey, InstrumentKey>,
     ) -> ExecutionRequestAudit<ExchangeKey, InstrumentKey> {
-        let sent_audit = match command {
-            Command::Execute(ExecutionRequest::Cancel(request)) => {
-                self.action_execute_cancel(request)
-            }
-            Command::Execute(ExecutionRequest::Open(request)) => self.action_execute_open(request),
-            Command::ClosePosition(instrument) => self.close_position(instrument),
-            Command::CloseAllPositions => self.close_all_positions(),
-            Command::CancelOrderById((instrument, id)) => self.cancel_order_by_id(instrument, id),
-            Command::CancelAllOrders => self.cancel_all_orders(),
-        };
+        // let sent_audit = match command {
+        //     Command::Execute(ExecutionRequest::Cancel(request)) => {
+        //         self.action_execute_cancel(request)
+        //     }
+        //     Command::Execute(ExecutionRequest::Open(request)) => self.action_execute_open(request),
+        //     Command::ClosePosition(instrument) => self.close_position(instrument),
+        //     Command::CloseAllPositions => self.close_all_positions(),
+        //     Command::CancelOrderById((instrument, id)) => self.cancel_order_by_id(instrument, id),
+        //     Command::CancelAllOrders => self.cancel_all_orders(),
+        // };
+        //
+        // ExecutionRequestAudit::from(sent_audit)
 
-        ExecutionRequestAudit::from(sent_audit)
+        todo!()
     }
 
     pub fn action_execute_cancel(
         &mut self,
         request: &Order<ExchangeKey, InstrumentKey, RequestCancel>,
     ) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
-        self.send_execution_request(request)
-            .map(|_| SentRequestsAudit {
-                cancels: NoneOneOrMany::One(request.clone()),
-                ..Default::default()
-            })
-            .unwrap_or_else(|error| SentRequestsAudit {
-                failed_cancels: NoneOneOrMany::One((request.clone(), EngineError::from(error))),
-                ..Default::default()
-            })
+        todo!()
+        // self.send_execution_request(request)
+        //     .map(|_| SentRequestsAudit {
+        //         cancels: NoneOneOrMany::One(request.clone()),
+        //         ..Default::default()
+        //     })
+        //     .unwrap_or_else(|error| SentRequestsAudit {
+        //         failed_cancels: NoneOneOrMany::One((request.clone(), EngineError::from(error))),
+        //         ..Default::default()
+        //     })
     }
 
     pub fn send_execution_request<Kind>(

@@ -45,10 +45,10 @@ pub type IndexedEngineEvent<MarketKind> =
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, From)]
 pub enum EngineEvent<MarketKind, ExchangeKey, AssetKey, InstrumentKey> {
     Shutdown,
+    Command(Command<ExchangeKey, InstrumentKey>),
     TradingStateUpdate(TradingState),
     Account(AccountStreamEvent<ExchangeKey, AssetKey, InstrumentKey>),
     Market(MarketStreamEvent<InstrumentKey, MarketKind>),
-    Command(Command<ExchangeKey, InstrumentKey>),
 }
 
 impl<MarketKind, ExchangeKey, AssetKey, InstrumentKey>
