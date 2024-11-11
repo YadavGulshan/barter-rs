@@ -1,11 +1,9 @@
 use crate::v2::{
     engine::{
+        action::send_requests::{send_requests, SendRequestsOutput},
         execution_tx::ExecutionTxMap,
         state::{instrument::InstrumentState, EngineState, StateManager},
-        v2::{
-            action::engine::{send_requests, send_requests::SendRequestsOutput},
-            Engine,
-        },
+        Engine,
     },
     order::{Order, RequestCancel, RequestOpen},
     risk::{RiskApproved, RiskManager, RiskRefused},
@@ -34,7 +32,7 @@ pub struct GenerateAlgoOrdersOutput<ExchangeKey, InstrumentKey> {
     pub opens_refused: NoneOneOrMany<RiskRefused<Order<ExchangeKey, InstrumentKey, RequestOpen>>>,
 }
 
-impl<MarketState, StrategyT, Risk, ExecutionTxs, ExchangeKey, AssetKey, InstrumentKey>
+impl<MarketState, ExecutionTxs, StrategyT, Risk, ExchangeKey, AssetKey, InstrumentKey>
     GenerateAlgoOrders<ExchangeKey, InstrumentKey>
     for Engine<
         EngineState<
@@ -45,14 +43,14 @@ impl<MarketState, StrategyT, Risk, ExecutionTxs, ExchangeKey, AssetKey, Instrume
             AssetKey,
             InstrumentKey,
         >,
+        ExecutionTxs,
         StrategyT,
         Risk,
-        ExecutionTxs,
     >
 where
+    ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
     StrategyT: Strategy<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
     Risk: RiskManager<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
-    ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
     ExchangeKey: Debug + Clone,
     InstrumentKey: Debug + Clone,
     EngineState<MarketState, StrategyT::State, Risk::State, ExchangeKey, AssetKey, InstrumentKey>:
@@ -84,12 +82,8 @@ where
         );
 
         // Send risk approved order requests
-        let cancels = send_requests::send_requests(
-            txs,
-            cancels.into_iter().map(|RiskApproved(cancel)| cancel),
-        );
-        let opens =
-            send_requests::send_requests(txs, opens.into_iter().map(|RiskApproved(open)| open));
+        let cancels = send_requests(txs, cancels.into_iter().map(|RiskApproved(cancel)| cancel));
+        let opens = send_requests(txs, opens.into_iter().map(|RiskApproved(open)| open));
 
         // Collect remaining Iterators (so we can access &mut self)
         let cancels_refused = refused_cancels.into_iter().collect();

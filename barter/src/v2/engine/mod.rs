@@ -1,8 +1,12 @@
 use crate::v2::{
     engine::{
-        audit::{request::sent::SentRequestsAudit, Audit, AuditEvent, Auditor},
-        command::Command,
-        error::{EngineError, UnrecoverableEngineError},
+        action::{
+            close_positions::{CloseAllPositionsStrategy, ClosePositions},
+            send_requests::send_requests,
+            ActionOutput,
+        },
+        audit::{Audit, AuditEvent, Auditor},
+        command::{Command, InstrumentFilter},
         execution_tx::ExecutionTxMap,
         state::{
             asset::AssetState,
@@ -10,33 +14,31 @@ use crate::v2::{
             instrument::{market_data::MarketDataState, InstrumentState},
             order_manager::OrderManager,
             trading::TradingState,
-            EngineState, StateManager,
+            EngineState, IndexedEngineState, StateManager,
         },
     },
-    execution::{AccountEvent, ExecutionRequest},
-    order::{Order, OrderId, RequestCancel, RequestOpen},
-    risk::{RiskApproved, RiskManager},
+    execution::AccountEvent,
+    order::{Order, RequestCancel, RequestOpen},
+    risk::RiskManager,
     strategy::Strategy,
     EngineEvent,
 };
-use audit::{
-    request::{risk_refused::RiskRefusedRequestsAudit, ExecutionRequestAudit},
-    shutdown::ShutdownAudit,
-};
+use audit::{request::ExecutionRequestAudit, shutdown::ShutdownAudit};
 use barter_data::event::MarketEvent;
-use barter_instrument::exchange::ExchangeId;
+use barter_instrument::{
+    asset::{name::AssetNameInternal, AssetIndex},
+    exchange::{ExchangeId, ExchangeIndex},
+    instrument::{name::InstrumentNameInternal, InstrumentIndex},
+};
 use barter_integration::{
     channel::{ChannelTxDroppable, Tx},
-    collection::none_one_or_many::NoneOneOrMany,
     Unrecoverable,
 };
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use std::fmt::Debug;
-use tracing::error;
 
-mod action;
-mod action_other;
+pub mod action;
 pub mod audit;
 pub mod command;
 pub mod error;
@@ -225,6 +227,77 @@ where
     }
 }
 
+impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, Risk> {
+    pub fn action<MarketState, ExchangeKey, AssetKey, InstrumentKey>(
+        &mut self,
+        command: &Command<ExchangeKey, InstrumentKey>,
+    ) -> ActionOutput<ExchangeKey, InstrumentKey>
+    where
+        State: InstrumentStateManager<InstrumentKey>,
+        State: StateManager<
+            InstrumentKey,
+            State = InstrumentState<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
+        >,
+        ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
+        Strategy: CloseAllPositionsStrategy<ExchangeKey, InstrumentKey, State = State>,
+        ExchangeKey: Debug + Clone,
+        InstrumentKey: Debug + Clone,
+    {
+        match &command {
+            Command::SendCancelRequests(requests) => {
+                let cancels = send_requests(&self.execution_txs, requests.clone());
+                record_in_flight_cancels(&mut self.state, &cancels.sent);
+                ActionOutput::CancelOrders(cancels)
+            }
+            Command::SendOpenRequests(requests) => {
+                let opens = send_requests(&self.execution_txs, requests.clone());
+                record_in_flight_opens(&mut self.state, &opens.sent);
+                ActionOutput::OpenOrders(opens)
+            }
+            Command::ClosePositions(filter) => {
+                ActionOutput::ClosePositions(self.close_positions(filter))
+            }
+            Command::CancelOrders(filter) => {}
+        }
+
+        pub fn record_in_flight_cancels<'a>(
+            &mut self,
+            requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestCancel>>,
+        ) where
+            Self: StateManager<
+                InstrumentKey,
+                State = InstrumentState<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
+            >,
+            ExchangeKey: Debug + Clone + 'a,
+            InstrumentKey: Debug + Clone + 'a,
+        {
+            for request in requests.into_iter() {
+                self.state_mut(&request.instrument)
+                    .orders
+                    .record_in_flight_cancel(request);
+            }
+        }
+
+        pub fn record_in_flight_opens<'a>(
+            &mut self,
+            requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestOpen>>,
+        ) where
+            Self: StateManager<
+                InstrumentKey,
+                State = InstrumentState<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
+            >,
+            ExchangeKey: Debug + Clone + 'a,
+            InstrumentKey: Debug + Clone + 'a,
+        {
+            for request in requests.into_iter() {
+                self.state_mut(&request.instrument)
+                    .orders
+                    .record_in_flight_open(request);
+            }
+        }
+    }
+}
+
 // Todo: could further abstract State here...
 impl<ExecutionTxs, MarketState, StrategyT, Risk, ExchangeKey, AssetKey, InstrumentKey>
     Engine<
@@ -254,250 +327,368 @@ where
                 State = InstrumentState<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
             >,
 {
-    pub fn action(
-        &mut self,
-        command: &Command<ExchangeKey, InstrumentKey>,
-    ) -> ExecutionRequestAudit<ExchangeKey, InstrumentKey> {
-        // let sent_audit = match command {
-        //     Command::Execute(ExecutionRequest::Cancel(request)) => {
-        //         self.action_execute_cancel(request)
-        //     }
-        //     Command::Execute(ExecutionRequest::Open(request)) => self.action_execute_open(request),
-        //     Command::ClosePosition(instrument) => self.close_position(instrument),
-        //     Command::CloseAllPositions => self.close_all_positions(),
-        //     Command::CancelOrderById((instrument, id)) => self.cancel_order_by_id(instrument, id),
-        //     Command::CancelAllOrders => self.cancel_all_orders(),
-        // };
-        //
-        // ExecutionRequestAudit::from(sent_audit)
+    // pub fn action_execute_cancel(
+    //     &mut self,
+    //     request: &Order<ExchangeKey, InstrumentKey, RequestCancel>,
+    // ) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
+    //     todo!()
+    //     // self.send_execution_request(request)
+    //     //     .map(|_| SentRequestsAudit {
+    //     //         cancels: NoneOneOrMany::One(request.clone()),
+    //     //         ..Default::default()
+    //     //     })
+    //     //     .unwrap_or_else(|error| SentRequestsAudit {
+    //     //         failed_cancels: NoneOneOrMany::One((request.clone(), EngineError::from(error))),
+    //     //         ..Default::default()
+    //     //     })
+    // }
+    //
+    // pub fn send_execution_request<Kind>(
+    //     &self,
+    //     request: &Order<ExchangeKey, InstrumentKey, Kind>,
+    // ) -> Result<(), UnrecoverableEngineError>
+    // where
+    //     Kind: Clone + Debug,
+    //     ExecutionRequest<ExchangeKey, InstrumentKey>: From<Order<ExchangeKey, InstrumentKey, Kind>>,
+    // {
+    //     match self
+    //         .execution_txs
+    //         .find(&request.exchange)?
+    //         .send(ExecutionRequest::from(request.clone()))
+    //     {
+    //         Ok(()) => Ok(()),
+    //         Err(error) if error.is_unrecoverable() => {
+    //             Err(UnrecoverableEngineError::ExecutionChannelTerminated(
+    //                 format!(
+    //                     "{:?} execution channel terminated, failed to send {:?}",
+    //                     request.exchange, request
+    //                 )
+    //                 .to_string(),
+    //             ))
+    //         }
+    //         Err(error) => {
+    //             error!(
+    //                 exchange = ?request.exchange,
+    //                 ?request,
+    //                 ?error,
+    //                 "failed to send ExecutionRequest due to unhealthy channel"
+    //             );
+    //             Ok(())
+    //         }
+    //     }
+    // }
+    //
+    // pub fn action_execute_open(
+    //     &mut self,
+    //     request: &Order<ExchangeKey, InstrumentKey, RequestOpen>,
+    // ) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
+    //     self.send_execution_request(request)
+    //         .map(|_| SentRequestsAudit {
+    //             opens: NoneOneOrMany::One(request.clone()),
+    //             ..Default::default()
+    //         })
+    //         .unwrap_or_else(|error| SentRequestsAudit {
+    //             failed_opens: NoneOneOrMany::One((request.clone(), EngineError::from(error))),
+    //             ..Default::default()
+    //         })
+    // }
+    //
+    // pub fn close_position(
+    //     &mut self,
+    //     instrument: &InstrumentKey,
+    // ) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
+    //     // Generate orders
+    //     let (cancels, opens) = self.strategy.close_position_request(
+    //         instrument,
+    //         &self.state.strategy,
+    //         &self.state.assets,
+    //         &self.state.instruments,
+    //     );
+    //
+    //     // Bypass risk checks...
+    //
+    //     self.send_orders(cancels, opens)
+    // }
+    //
+    // pub fn close_all_positions(&mut self) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
+    //     // Generate orders
+    //     let (cancels, opens) = self.strategy.close_all_positions_request(
+    //         &self.state.strategy,
+    //         &self.state.assets,
+    //         &self.state.instruments,
+    //     );
+    //
+    //     // Bypass risk checks...
+    //
+    //     self.send_orders(cancels, opens)
+    // }
+    //
+    // pub fn cancel_order_by_id(
+    //     &mut self,
+    //     instrument: &InstrumentKey,
+    //     id: &OrderId,
+    // ) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
+    //     // Todo: this evenings plan:
+    //     //  1. Implement CancelAllOrders & CancelOrderById
+    //     //  2. Re-design ExecutionManager to run request futures concurrently
+    //
+    //     // Todo: Open Q:
+    //     // - Maybe CancelAllOrders, etc, should only be accessible via Command to keep audit flow
+    //     //   in tact?
+    //     // - Each method could have it's own custom Audit, with some parent enum
+    //     //  eg/ CommandAudit::CancelAllOrders, etc. TradeAudit (mirror engine)
+    //
+    //     // For extendability, each piece of functionality could be a trait that the Engine
+    //     // implements. eg/ trait CancelAllOrders, CancelOrderById, each with an Audit
+    //
+    //     todo!()
+    //     // self.execution_tx.send(ExecutionRequest::CancelOrder(RequestCancel::new(instrument, id)))
+    // }
+    //
+    // pub fn cancel_all_orders(&mut self) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
+    //     // self.state.instruments
+    //
+    //     todo!()
+    // }
+    //
+    // pub fn trade(&mut self) -> ExecutionRequestAudit<ExchangeKey, InstrumentKey> {
+    //     // Generate orders
+    //     let (cancels, opens) = self.strategy.generate_orders(
+    //         &self.state.strategy,
+    //         &self.state.assets,
+    //         &self.state.instruments,
+    //     );
+    //
+    //     // RiskApprove & RiskRefuse order requests
+    //     let (cancels, opens, refused_cancels, refused_opens) = self.risk.check(
+    //         &self.state.risk,
+    //         &self.state.assets,
+    //         &self.state.instruments,
+    //         cancels,
+    //         opens,
+    //     );
+    //
+    //     // Send risk approved order requests
+    //     let sent = self.send_orders(
+    //         cancels.into_iter().map(|RiskApproved(cancel)| cancel),
+    //         opens.into_iter().map(|RiskApproved(open)| open),
+    //     );
+    //
+    //     // Collect remaining Iterators (so we can &mut self)
+    //     let refused = RiskRefusedRequestsAudit {
+    //         refused_cancels: refused_cancels.into_iter().collect(),
+    //         refused_opens: refused_opens.into_iter().collect(),
+    //     };
+    //
+    //     // Record in flight order requests
+    //     self.record_requests_in_flight(&sent.cancels, &sent.opens);
+    //
+    //     ExecutionRequestAudit { sent, refused }
+    // }
+    //
+    // pub fn send_orders(
+    //     &self,
+    //     cancels: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestCancel>>,
+    //     opens: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestOpen>>,
+    // ) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
+    //     // Send order requests
+    //     let (cancels_sent, cancel_send_errs): (Vec<_>, Vec<_>) = cancels
+    //         .into_iter()
+    //         .map(|cancel| {
+    //             self.send_execution_request(&cancel)
+    //                 .map_err(|error| (cancel.clone(), EngineError::from(error)))
+    //                 .map(|_| cancel)
+    //         })
+    //         .partition_result();
+    //
+    //     let (opens_sent, open_send_errs): (Vec<_>, Vec<_>) = opens
+    //         .into_iter()
+    //         .map(|open| {
+    //             self.send_execution_request(&open)
+    //                 .map_err(|error| (open.clone(), EngineError::from(error)))
+    //                 .map(|_| open)
+    //         })
+    //         .partition_result();
+    //
+    //     SentRequestsAudit {
+    //         cancels: NoneOneOrMany::Many(cancels_sent),
+    //         opens: NoneOneOrMany::Many(opens_sent),
+    //         failed_cancels: NoneOneOrMany::from(cancel_send_errs),
+    //         failed_opens: NoneOneOrMany::from(open_send_errs),
+    //     }
+    // }
 
-        todo!()
-    }
+    // pub fn record_requests_in_flight<'a>(
+    //     &mut self,
+    //     cancels: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestCancel>>,
+    //     opens: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestOpen>>,
+    // ) where
+    //     ExchangeKey: 'a,
+    //     InstrumentKey: 'a,
+    // {
+    //     for request in cancels.into_iter() {
+    //         self.record_request_cancel_in_flight(request);
+    //     }
+    //     for request in opens.into_iter() {
+    //         self.record_request_open_in_flight(request);
+    //     }
+    // }
+    //
+    // pub fn record_in_flight_cancels(
+    //     &mut self,
+    //     requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestCancel>>,
+    // ) {
+    //     for request in requests.into_iter() {
+    //         self.state
+    //             .state_mut(&request.instrument)
+    //             .orders
+    //             .record_in_flight_cancel(request);
+    //     }
+    // }
+    //
+    // pub fn record_in_flight_opens(
+    //     &mut self,
+    //     requests: impl IntoIterator<Item = &Order<ExchangeKey, InstrumentKey, RequestOpen>>,
+    // )
+    // where
+    //     Self: StateManager<InstrumentKey, State = InstrumentState<MarketState, ExchangeKey, AssetKey, InstrumentKey>>
+    // {
+    //     for request in requests.into_iter() {
+    //         self.state
+    //             .state_mut(&request.instrument)
+    //             .orders
+    //             .record_in_flight_open(request);
+    //     }
+}
 
-    pub fn action_execute_cancel(
-        &mut self,
-        request: &Order<ExchangeKey, InstrumentKey, RequestCancel>,
-    ) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
-        todo!()
-        // self.send_execution_request(request)
-        //     .map(|_| SentRequestsAudit {
-        //         cancels: NoneOneOrMany::One(request.clone()),
-        //         ..Default::default()
-        //     })
-        //     .unwrap_or_else(|error| SentRequestsAudit {
-        //         failed_cancels: NoneOneOrMany::One((request.clone(), EngineError::from(error))),
-        //         ..Default::default()
-        //     })
-    }
-
-    pub fn send_execution_request<Kind>(
-        &self,
-        request: &Order<ExchangeKey, InstrumentKey, Kind>,
-    ) -> Result<(), UnrecoverableEngineError>
-    where
-        Kind: Clone + Debug,
-        ExecutionRequest<ExchangeKey, InstrumentKey>: From<Order<ExchangeKey, InstrumentKey, Kind>>,
-    {
-        match self
-            .execution_txs
-            .find(&request.exchange)?
-            .send(ExecutionRequest::from(request.clone()))
-        {
-            Ok(()) => Ok(()),
-            Err(error) if error.is_unrecoverable() => {
-                Err(UnrecoverableEngineError::ExecutionChannelTerminated(
-                    format!(
-                        "{:?} execution channel terminated, failed to send {:?}",
-                        request.exchange, request
-                    )
-                    .to_string(),
-                ))
-            }
-            Err(error) => {
-                error!(
-                    exchange = ?request.exchange,
-                    ?request,
-                    ?error,
-                    "failed to send ExecutionRequest due to unhealthy channel"
-                );
-                Ok(())
-            }
-        }
-    }
-
-    pub fn action_execute_open(
-        &mut self,
-        request: &Order<ExchangeKey, InstrumentKey, RequestOpen>,
-    ) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
-        self.send_execution_request(request)
-            .map(|_| SentRequestsAudit {
-                opens: NoneOneOrMany::One(request.clone()),
-                ..Default::default()
-            })
-            .unwrap_or_else(|error| SentRequestsAudit {
-                failed_opens: NoneOneOrMany::One((request.clone(), EngineError::from(error))),
-                ..Default::default()
-            })
-    }
-
-    pub fn close_position(
-        &mut self,
-        instrument: &InstrumentKey,
-    ) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
-        // Generate orders
-        let (cancels, opens) = self.strategy.close_position_request(
-            instrument,
-            &self.state.strategy,
-            &self.state.assets,
-            &self.state.instruments,
-        );
-
-        // Bypass risk checks...
-
-        self.send_orders(cancels, opens)
-    }
-
-    pub fn close_all_positions(&mut self) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
-        // Generate orders
-        let (cancels, opens) = self.strategy.close_all_positions_request(
-            &self.state.strategy,
-            &self.state.assets,
-            &self.state.instruments,
-        );
-
-        // Bypass risk checks...
-
-        self.send_orders(cancels, opens)
-    }
-
-    pub fn cancel_order_by_id(
-        &mut self,
-        instrument: &InstrumentKey,
-        id: &OrderId,
-    ) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
-        // Todo: this evenings plan:
-        //  1. Implement CancelAllOrders & CancelOrderById
-        //  2. Re-design ExecutionManager to run request futures concurrently
-
-        // Todo: Open Q:
-        // - Maybe CancelAllOrders, etc, should only be accessible via Command to keep audit flow
-        //   in tact?
-        // - Each method could have it's own custom Audit, with some parent enum
-        //  eg/ CommandAudit::CancelAllOrders, etc. TradeAudit (mirror engine)
-
-        // For extendability, each piece of functionality could be a trait that the Engine
-        // implements. eg/ trait CancelAllOrders, CancelOrderById, each with an Audit
-
-        todo!()
-        // self.execution_tx.send(ExecutionRequest::CancelOrder(RequestCancel::new(instrument, id)))
-    }
-
-    pub fn cancel_all_orders(&mut self) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
-        // self.state.instruments
-
-        todo!()
-    }
-
-    pub fn trade(&mut self) -> ExecutionRequestAudit<ExchangeKey, InstrumentKey> {
-        // Generate orders
-        let (cancels, opens) = self.strategy.generate_orders(
-            &self.state.strategy,
-            &self.state.assets,
-            &self.state.instruments,
-        );
-
-        // RiskApprove & RiskRefuse order requests
-        let (cancels, opens, refused_cancels, refused_opens) = self.risk.check(
-            &self.state.risk,
-            &self.state.assets,
-            &self.state.instruments,
-            cancels,
-            opens,
-        );
-
-        // Send risk approved order requests
-        let sent = self.send_orders(
-            cancels.into_iter().map(|RiskApproved(cancel)| cancel),
-            opens.into_iter().map(|RiskApproved(open)| open),
-        );
-
-        // Collect remaining Iterators (so we can &mut self)
-        let refused = RiskRefusedRequestsAudit {
-            refused_cancels: refused_cancels.into_iter().collect(),
-            refused_opens: refused_opens.into_iter().collect(),
-        };
-
-        // Record in flight order requests
-        self.record_requests_in_flight(&sent.cancels, &sent.opens);
-
-        ExecutionRequestAudit { sent, refused }
-    }
-
-    pub fn send_orders(
-        &self,
-        cancels: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestCancel>>,
-        opens: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestOpen>>,
-    ) -> SentRequestsAudit<ExchangeKey, InstrumentKey> {
-        // Send order requests
-        let (cancels_sent, cancel_send_errs): (Vec<_>, Vec<_>) = cancels
-            .into_iter()
-            .map(|cancel| {
-                self.send_execution_request(&cancel)
-                    .map_err(|error| (cancel.clone(), EngineError::from(error)))
-                    .map(|_| cancel)
-            })
-            .partition_result();
-
-        let (opens_sent, open_send_errs): (Vec<_>, Vec<_>) = opens
-            .into_iter()
-            .map(|open| {
-                self.send_execution_request(&open)
-                    .map_err(|error| (open.clone(), EngineError::from(error)))
-                    .map(|_| open)
-            })
-            .partition_result();
-
-        SentRequestsAudit {
-            cancels: NoneOneOrMany::Many(cancels_sent),
-            opens: NoneOneOrMany::Many(opens_sent),
-            failed_cancels: NoneOneOrMany::from(cancel_send_errs),
-            failed_opens: NoneOneOrMany::from(open_send_errs),
-        }
-    }
-
-    pub fn record_requests_in_flight<'a>(
-        &mut self,
-        cancels: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestCancel>>,
-        opens: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestOpen>>,
-    ) where
-        ExchangeKey: 'a,
-        InstrumentKey: 'a,
-    {
-        for request in cancels.into_iter() {
-            self.record_request_cancel_in_flight(request);
-        }
-        for request in opens.into_iter() {
-            self.record_request_open_in_flight(request);
-        }
-    }
-
-    pub fn record_request_cancel_in_flight(
-        &mut self,
-        request: &Order<ExchangeKey, InstrumentKey, RequestCancel>,
-    ) {
-        self.state
+pub fn record_in_flight_cancels<'a, State, MarketState, ExchangeKey, AssetKey, InstrumentKey>(
+    state: &'a mut State,
+    requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestCancel>>,
+) where
+    State: StateManager<
+        InstrumentKey,
+        State = InstrumentState<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
+    >,
+    ExchangeKey: Debug + Clone + 'a,
+    InstrumentKey: Debug + Clone + 'a,
+{
+    for request in requests.into_iter() {
+        state
             .state_mut(&request.instrument)
             .orders
             .record_in_flight_cancel(request);
     }
+}
 
-    pub fn record_request_open_in_flight(
-        &mut self,
-        request: &Order<ExchangeKey, InstrumentKey, RequestOpen>,
-    ) {
-        self.state
+pub fn record_in_flight_opens<'a, State, MarketState, ExchangeKey, AssetKey, InstrumentKey>(
+    state: &'a mut State,
+    requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestOpen>>,
+) where
+    State: StateManager<
+        InstrumentKey,
+        State = InstrumentState<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
+    >,
+    ExchangeKey: Debug + Clone + 'a,
+    InstrumentKey: Debug + Clone + 'a,
+{
+    for request in requests.into_iter() {
+        state
             .state_mut(&request.instrument)
             .orders
             .record_in_flight_open(request);
+    }
+}
+
+pub trait InstrumentStateManager<InstrumentKey> {
+    type MarketState: Debug + Clone;
+    type ExchangeKey: Debug + Clone;
+    type AssetKey: Debug + Clone;
+
+    fn state(
+        &self,
+        key: &InstrumentKey,
+    ) -> &InstrumentState<Self::MarketState, Self::ExchangeKey, Self::AssetKey, InstrumentKey>;
+    fn state_mut(
+        &mut self,
+        key: &InstrumentKey,
+    ) -> &mut InstrumentState<Self::MarketState, Self::ExchangeKey, Self::AssetKey, InstrumentKey>;
+    fn states_by_filter(
+        &self,
+        filter: &InstrumentFilter<Self::ExchangeKey, InstrumentKey>,
+    ) -> impl Iterator<
+        Item = InstrumentState<Self::MarketState, Self::ExchangeKey, Self::AssetKey, InstrumentKey>,
+    >;
+}
+
+impl<MarketState, Strategy, Risk> InstrumentStateManager<InstrumentIndex>
+    for IndexedEngineState<MarketState, Strategy, Risk>
+where
+    MarketState: Debug + Clone,
+{
+    type MarketState = MarketState;
+    type ExchangeKey = ExchangeIndex;
+    type AssetKey = AssetIndex;
+
+    fn state(
+        &self,
+        key: &InstrumentIndex,
+    ) -> &InstrumentState<MarketState, ExchangeIndex, AssetIndex, InstrumentIndex> {
+        todo!()
+    }
+
+    fn state_mut(
+        &mut self,
+        key: &InstrumentIndex,
+    ) -> &mut InstrumentState<MarketState, ExchangeIndex, AssetIndex, InstrumentIndex> {
+        todo!()
+    }
+
+    fn states_by_filter(
+        &self,
+        filter: &InstrumentFilter<ExchangeIndex, InstrumentIndex>,
+    ) -> impl Iterator<Item = InstrumentState<MarketState, ExchangeIndex, AssetIndex, InstrumentIndex>>
+    {
+        std::iter::empty()
+    }
+}
+
+impl<MarketState, Strategy, Risk> InstrumentStateManager<InstrumentNameInternal>
+    for EngineState<
+        MarketState,
+        Strategy,
+        Risk,
+        ExchangeId,
+        AssetNameInternal,
+        InstrumentNameInternal,
+    >
+where
+    MarketState: Debug + Clone,
+{
+    type MarketState = MarketState;
+    type ExchangeKey = ExchangeId;
+    type AssetKey = AssetNameInternal;
+
+    fn state(
+        &self,
+        key: &InstrumentNameInternal,
+    ) -> &InstrumentState<MarketState, ExchangeId, AssetNameInternal, InstrumentNameInternal> {
+        todo!()
+    }
+
+    fn state_mut(
+        &mut self,
+        key: &InstrumentNameInternal,
+    ) -> &mut InstrumentState<MarketState, ExchangeId, AssetNameInternal, InstrumentNameInternal>
+    {
+        todo!()
+    }
+
+    fn states_by_filter(
+        &self,
+        filter: &InstrumentFilter<ExchangeId, InstrumentNameInternal>,
+    ) -> impl Iterator<
+        Item = InstrumentState<MarketState, ExchangeId, AssetNameInternal, InstrumentNameInternal>,
+    > {
+        std::iter::empty()
     }
 }
