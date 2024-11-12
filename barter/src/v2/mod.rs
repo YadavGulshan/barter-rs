@@ -1,5 +1,5 @@
 use crate::v2::{
-    engine::{command::Command, state::trading::TradingState},
+    engine::{command::Command, state::trading_state_updater::TradingState},
     execution::{manager::AccountStreamEvent, AccountEvent},
 };
 use barter_data::{event::MarketEvent, streams::consumer::MarketStreamEvent};

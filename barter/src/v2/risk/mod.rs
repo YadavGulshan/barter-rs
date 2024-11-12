@@ -1,7 +1,4 @@
-use crate::v2::{
-    engine::state::{asset::AssetStates, instrument::InstrumentStates},
-    order::{Order, RequestCancel, RequestOpen},
-};
+use crate::v2::order::{Order, RequestCancel, RequestOpen};
 use barter_integration::Unrecoverable;
 use derive_more::{Constructor, Display, From};
 use serde::{Deserialize, Serialize};
@@ -11,14 +8,12 @@ use std::{fmt::Debug, hash::Hash};
 /// *EXAMPLE IMPLEMENTATION ONLY, PLEASE DO NOT USE FOR ANYTHING OTHER THAN TESTING PURPOSES.*
 pub mod default;
 
-pub trait RiskManager<MarketState, ExchangeKey, AssetKey, InstrumentKey> {
-    type State: Clone + Send;
+pub trait RiskManager<ExchangeKey, InstrumentKey> {
+    type State: Clone;
 
     fn check(
         &self,
-        strategy_state: &Self::State,
-        asset_states: &AssetStates,
-        instrument_states: &InstrumentStates<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
+        state: &Self::State,
         cancels: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestCancel>>,
         opens: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestOpen>>,
     ) -> (

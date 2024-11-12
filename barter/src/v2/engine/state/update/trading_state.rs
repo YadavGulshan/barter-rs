@@ -1,9 +1,16 @@
-use crate::v2::engine::state::{trading::TradingState, EngineState};
+use crate::v2::engine::state::EngineState;
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 pub trait TradingStateUpdater {
     type Audit;
     fn update_from_trading_state_update(&mut self, event: TradingState) -> Self::Audit;
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
+pub enum TradingState {
+    Enabled,
+    Disabled,
 }
 
 pub struct TradingStateUpdaterAudit {
@@ -12,7 +19,7 @@ pub struct TradingStateUpdaterAudit {
 }
 
 impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey> TradingStateUpdater
-    for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
+for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
 {
     type Audit = Option<TradingStateUpdaterAudit>;
 

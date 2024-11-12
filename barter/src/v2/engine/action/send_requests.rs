@@ -1,17 +1,12 @@
 use crate::v2::{
-    engine::{
-        error::{EngineError, UnrecoverableEngineError},
-        execution_tx::ExecutionTxMap,
-    },
-    execution::ExecutionRequest,
+    engine::error::EngineError
+    ,
     order::Order,
 };
 use barter_integration::{channel::Tx, collection::none_one_or_many::NoneOneOrMany, Unrecoverable};
 use derive_more::Constructor;
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
-use tracing::error;
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Constructor)]
 pub struct SendRequestsOutput<ExchangeKey, InstrumentKey, Kind> {
@@ -29,61 +24,62 @@ impl<ExchangeKey, InstrumentKey, Kind> Unrecoverable
     }
 }
 
-pub fn send_requests<ExchangeKey, InstrumentKey, Kind>(
-    txs: &impl ExecutionTxMap<ExchangeKey, InstrumentKey>,
-    requests: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, Kind>>,
-) -> SendRequestsOutput<ExchangeKey, InstrumentKey, Kind>
-where
-    ExchangeKey: Debug + Clone,
-    InstrumentKey: Debug + Clone,
-    Kind: Debug + Clone,
-    ExecutionRequest<ExchangeKey, InstrumentKey>: From<Order<ExchangeKey, InstrumentKey, Kind>>,
-{
-    // Send order requests
-    let (sent, errors): (Vec<_>, Vec<_>) = requests
-        .into_iter()
-        .map(|request| {
-            send_request(txs, &request)
-                .map_err(|error| (request.clone(), EngineError::from(error)))
-                .map(|_| request)
-        })
-        .partition_result();
-
-    SendRequestsOutput::new(NoneOneOrMany::from(sent), NoneOneOrMany::from(errors))
-}
-
-pub fn send_request<ExchangeKey, InstrumentKey, Kind>(
-    txs: &impl ExecutionTxMap<ExchangeKey, InstrumentKey>,
-    request: &Order<ExchangeKey, InstrumentKey, Kind>,
-) -> Result<(), UnrecoverableEngineError>
-where
-    ExchangeKey: Debug + Clone,
-    InstrumentKey: Debug + Clone,
-    Kind: Debug + Clone,
-    ExecutionRequest<ExchangeKey, InstrumentKey>: From<Order<ExchangeKey, InstrumentKey, Kind>>,
-{
-    match txs
-        .find(&request.exchange)?
-        .send(ExecutionRequest::from(request.clone()))
-    {
-        Ok(()) => Ok(()),
-        Err(error) if error.is_unrecoverable() => {
-            Err(UnrecoverableEngineError::ExecutionChannelTerminated(
-                format!(
-                    "{:?} execution channel terminated, failed to send {:?}",
-                    request.exchange, request
-                )
-                .to_string(),
-            ))
-        }
-        Err(error) => {
-            error!(
-                exchange = ?request.exchange,
-                ?request,
-                ?error,
-                "failed to send ExecutionRequest due to unhealthy channel"
-            );
-            Ok(())
-        }
-    }
-}
+// pub fn send_requests<ExchangeKey, InstrumentKey, Kind>(
+//     txs: &impl ExecutionTxMap<ExchangeKey, InstrumentKey>,
+//     requests: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, Kind>>,
+// ) -> SendRequestsOutput<ExchangeKey, InstrumentKey, Kind>
+// where
+//     ExchangeKey: Debug + Clone,
+//     InstrumentKey: Debug + Clone,
+//     Kind: Debug + Clone,
+//     ExecutionRequest<ExchangeKey, InstrumentKey>: From<Order<ExchangeKey, InstrumentKey, Kind>>,
+// {
+//     // Send order requests
+//     let (sent, errors): (Vec<_>, Vec<_>) = requests
+//         .into_iter()
+//         .map(|request| {
+//             send_request(txs, &request)
+//                 .map_err(|error| (request.clone(), EngineError::from(error)))
+//                 .map(|_| request)
+//         })
+//         .partition_result();
+//
+//     SendRequestsOutput::new(NoneOneOrMany::from(sent), NoneOneOrMany::from(errors))
+// }
+//
+// pub fn send_request<ExchangeKey, InstrumentKey, Kind>(
+//     txs: &impl ExecutionTxMap<ExchangeKey, InstrumentKey>,
+//     request: &Order<ExchangeKey, InstrumentKey, Kind>,
+// ) -> Result<(), UnrecoverableEngineError>
+// where
+//     ExchangeKey: Debug + Clone,
+//     InstrumentKey: Debug + Clone,
+//     Kind: Debug + Clone,
+//     ExecutionRequest<ExchangeKey, InstrumentKey>: From<Order<ExchangeKey, InstrumentKey, Kind>>,
+// {
+//     match txs
+//         .find(&request.exchange)?
+//         .send(ExecutionRequest::from(request.clone()))
+//     {
+//         Ok(()) => Ok(()),
+//         Err(error) if error.is_unrecoverable() => {
+//             Err(UnrecoverableEngineError::ExecutionChannelTerminated(
+//                 format!(
+//                     "{:?} execution channel terminated, failed to send {:?}",
+//                     request.exchange, request
+//                 )
+//                 .to_string(),
+//             ))
+//         }
+//         Err(error) => {
+//             // Todo: this does not actualy send the request, but would be ack'd
+//             error!(
+//                 exchange = ?request.exchange,
+//                 ?request,
+//                 ?error,
+//                 "failed to send ExecutionRequest due to unhealthy channel"
+//             );
+//             Ok(())
+//         }
+//     }
+// }

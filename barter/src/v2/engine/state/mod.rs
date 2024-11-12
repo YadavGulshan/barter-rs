@@ -1,3 +1,4 @@
+use crate::v2::engine::state::update::trading_state::TradingState;
 use crate::v2::{
     engine::{
         state::{
@@ -5,7 +6,7 @@ use crate::v2::{
             connectivity::{Connection, ConnectivityState, ConnectivityStates},
             instrument::{InstrumentState, InstrumentStates},
             order_manager::OrderManager,
-            trading::TradingState,
+            trading_state_updater::TradingState,
         },
         Processor,
     },
@@ -27,8 +28,7 @@ pub mod asset;
 pub mod connectivity;
 pub mod instrument;
 pub mod order_manager;
-pub mod trading;
-
+mod update;
 // Todo:
 //  - Maybe introduce State machine for dealing with connectivity VecMap issue...
 //    '--> could only check if a new Account/Market event updates to Connected if we are in

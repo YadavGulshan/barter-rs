@@ -22,7 +22,7 @@ pub trait CancelOrders<ExchangeKey, InstrumentKey> {
 impl<State, ExecutionTxs, Strategy, Risk, ExchangeKey, InstrumentKey>
     CancelOrders<ExchangeKey, InstrumentKey> for Engine<State, ExecutionTxs, Strategy, Risk>
 where
-    State: InstrumentStateManager<InstrumentKey, ExchangeKey = ExchangeKey>,
+    State: InstrumentStateManager<InstrumentKey>,//, Exchange = ExchangeKey>,
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
     ExchangeKey: Debug + Clone + PartialEq,
     InstrumentKey: Debug + Clone + PartialEq,
@@ -38,7 +38,14 @@ where
             .states_by_filter(filter)
             .flat_map(|state| state.orders.orders().filter_map(Order::as_request_cancel));
 
-        send_requests(&self.execution_txs, requests)
+        // Bypass risk checks...
+
+        let cancels = send_requests(&self.execution_txs, requests);
+        
+        // Record in flight order requests
+        self.record_in_flight_cancels(&cancels.sent);
+        
+        cancels
     }
 }
 

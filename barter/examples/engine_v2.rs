@@ -2,7 +2,10 @@ use barter::v2::{
     engine::{
         command::Command,
         run,
-        state::{instrument::market_data::DefaultMarketData, trading::TradingState, EngineState},
+        state::{
+            instrument::market_data::DefaultMarketData, trading_state_updater::TradingState,
+            EngineState,
+        },
         Engine,
     },
     error::BarterError,

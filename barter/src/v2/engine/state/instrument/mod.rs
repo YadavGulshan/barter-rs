@@ -17,7 +17,7 @@ pub mod market_data;
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct InstrumentStates<Market, ExchangeKey, AssetKey, InstrumentKey>(
-    pub  IndexMap<
+    pub IndexMap<
         InstrumentNameInternal,
         InstrumentState<Market, ExchangeKey, AssetKey, InstrumentKey>,
     >,
