@@ -16,6 +16,18 @@ pub trait GenerateAlgoOrders<ExchangeKey, InstrumentKey> {
     fn generate_algo_orders(&mut self) -> Self::Output;
 }
 
+pub trait AlgoStrategy<ExchangeKey, InstrumentKey> {
+    type State;
+
+    fn generate_orders(
+        &self,
+        state: &Self::State,
+    ) -> (
+        impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestCancel>>,
+        impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestOpen>>,
+    );
+}
+
 impl<State, ExecutionTxs, Strategy, Risk, ExchangeKey, InstrumentKey>
     GenerateAlgoOrders<ExchangeKey, InstrumentKey> for Engine<State, ExecutionTxs, Strategy, Risk>
 where
@@ -50,18 +62,6 @@ where
 
         GenerateAlgoOrdersOutput::new(cancels, cancels_refused, opens, opens_refused)
     }
-}
-
-pub trait AlgoStrategy<ExchangeKey, InstrumentKey> {
-    type State;
-
-    fn generate_orders(
-        &self,
-        state: &Self::State,
-    ) -> (
-        impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestCancel>>,
-        impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestOpen>>,
-    );
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Constructor)]

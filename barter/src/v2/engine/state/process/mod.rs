@@ -4,6 +4,10 @@ use crate::v2::{
 };
 use barter_data::streams::consumer::MarketStreamEvent;
 
+pub mod account;
+pub mod market;
+pub mod trading_state;
+
 impl<InstrumentKey, Kind, Market, Strategy, Risk, ExchangeKey, AssetKey>
     Processor<MarketStreamEvent<InstrumentKey, Kind>>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>

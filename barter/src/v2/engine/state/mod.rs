@@ -29,7 +29,7 @@ pub mod instrument;
 pub mod order_manager;
 pub mod process;
 pub mod trading_state_manager;
-pub mod update;
+
 // Todo:
 //  - Maybe introduce State machine for dealing with connectivity VecMap issue...
 //    '--> could only check if a new Account/Market event updates to Connected if we are in
@@ -41,7 +41,10 @@ pub type IndexedEngineState<Market, Strategy, Risk> =
 
 pub trait StateManager<Key> {
     type State;
+    type Filter;
+
     fn state(&self, key: &Key) -> &Self::State;
+    fn states(&self, filter: &Self::Filter) -> impl Iterator<Item = Self::State>;
     fn state_mut(&mut self, key: &Key) -> &mut Self::State;
 }
 
@@ -58,36 +61,6 @@ pub struct EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, Instrument
 impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
     EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
 {
-    pub fn record_in_flight_cancels<'a>(
-        &mut self,
-        cancels: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestCancel>>,
-    ) where
-        Self: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
-        ExchangeKey: Debug + Clone + 'a,
-        InstrumentKey: Debug + Clone + 'a,
-    {
-        for request in cancels.into_iter() {
-            self.state_mut(&request.instrument)
-                .orders
-                .record_in_flight_cancel(request);
-        }
-    }
-
-    pub fn record_in_flight_opens<'a>(
-        &mut self,
-        opens: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestOpen>>,
-    ) where
-        Self: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
-        ExchangeKey: Debug + Clone + 'a,
-        InstrumentKey: Debug + Clone + 'a,
-    {
-        for request in opens.into_iter() {
-            self.state_mut(&request.instrument)
-                .orders
-                .record_in_flight_open(request);
-        }
-    }
-
     pub fn update_from_account(
         &mut self,
         event: &AccountStreamEvent<ExchangeKey, AssetKey, InstrumentKey>,
