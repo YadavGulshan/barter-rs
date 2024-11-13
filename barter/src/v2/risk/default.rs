@@ -1,33 +1,41 @@
 use crate::v2::{
-    engine::{
-        state::{asset::AssetStates, instrument::InstrumentStates},
-        Processor,
-    },
+    engine::{state::EngineState, Processor},
     execution::AccountEvent,
     order::{Order, RequestCancel, RequestOpen},
     risk::{RiskApproved, RiskManager, RiskRefused},
 };
 use barter_data::event::MarketEvent;
-use std::hash::Hash;
+use std::marker::PhantomData;
 
 /// Example [`RiskManager`] implementation that approves all order requests.
 ///
 /// *EXAMPLE IMPLEMENTATION ONLY, PLEASE DO NOT USE FOR ANYTHING OTHER THAN TESTING PURPOSES.*
 #[derive(Debug, Clone)]
-pub struct DefaultRiskManager;
+pub struct DefaultRiskManager<Market, Strategy, AssetKey> {
+    phantom_data: PhantomData<(Market, Strategy, AssetKey)>,
+}
 
-impl<MarketState, ExchangeKey, AssetKey, InstrumentKey>
-    RiskManager<MarketState, ExchangeKey, AssetKey, InstrumentKey> for DefaultRiskManager
+impl<ExchangeKey, InstrumentKey, Market, Strategy, AssetKey> RiskManager<ExchangeKey, InstrumentKey>
+    for DefaultRiskManager<Market, Strategy, AssetKey>
 where
-    AssetKey: Eq + Hash,
+    Market: Clone,
+    Strategy: Clone,
+    ExchangeKey: Clone,
+    AssetKey: Clone,
+    InstrumentKey: Clone,
 {
-    type State = DefaultRiskManagerState;
+    type State = EngineState<
+        Market,
+        Strategy,
+        DefaultRiskManagerState,
+        ExchangeKey,
+        AssetKey,
+        InstrumentKey,
+    >;
 
     fn check(
         &self,
         _: &Self::State,
-        _: &AssetStates,
-        _: &InstrumentStates<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
         cancels: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestCancel>>,
         opens: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestOpen>>,
     ) -> (
@@ -51,11 +59,11 @@ pub struct DefaultRiskManagerState;
 impl<ExchangeKey, AssetKey, InstrumentKey>
     Processor<&AccountEvent<ExchangeKey, AssetKey, InstrumentKey>> for DefaultRiskManagerState
 {
-    type Output = ();
-    fn process(&mut self, _: &AccountEvent<ExchangeKey, AssetKey, InstrumentKey>) -> Self::Output {}
+    type Audit = ();
+    fn process(&mut self, _: &AccountEvent<ExchangeKey, AssetKey, InstrumentKey>) -> Self::Audit {}
 }
 
 impl<InstrumentKey, Kind> Processor<&MarketEvent<InstrumentKey, Kind>> for DefaultRiskManagerState {
-    type Output = ();
-    fn process(&mut self, _: &MarketEvent<InstrumentKey, Kind>) -> Self::Output {}
+    type Audit = ();
+    fn process(&mut self, _: &MarketEvent<InstrumentKey, Kind>) -> Self::Audit {}
 }

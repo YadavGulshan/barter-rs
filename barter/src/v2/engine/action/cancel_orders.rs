@@ -1,10 +1,8 @@
 use crate::v2::{
     engine::{
-        action::send_requests::{send_requests, SendRequestsOutput},
-        command::InstrumentFilter,
-        execution_tx::ExecutionTxMap,
-        state::{order_manager::OrderManager, StateManager},
-        Engine, InstrumentStateManager,
+        action::send_requests::SendRequestsOutput, command::InstrumentFilter,
+        execution_tx::ExecutionTxMap, state::order_manager::OrderManager, Engine,
+        InstrumentStateManager,
     },
     order::{Order, RequestCancel},
 };
@@ -22,7 +20,7 @@ pub trait CancelOrders<ExchangeKey, InstrumentKey> {
 impl<State, ExecutionTxs, Strategy, Risk, ExchangeKey, InstrumentKey>
     CancelOrders<ExchangeKey, InstrumentKey> for Engine<State, ExecutionTxs, Strategy, Risk>
 where
-    State: InstrumentStateManager<InstrumentKey>,//, Exchange = ExchangeKey>,
+    State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
     ExchangeKey: Debug + Clone + PartialEq,
     InstrumentKey: Debug + Clone + PartialEq,
@@ -40,11 +38,12 @@ where
 
         // Bypass risk checks...
 
-        let cancels = send_requests(&self.execution_txs, requests);
-        
+        // Send order requests
+        let cancels = self.send_requests(requests);
+
         // Record in flight order requests
         self.record_in_flight_cancels(&cancels.sent);
-        
+
         cancels
     }
 }

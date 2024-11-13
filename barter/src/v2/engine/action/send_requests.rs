@@ -1,9 +1,5 @@
-use crate::v2::{
-    engine::error::EngineError
-    ,
-    order::Order,
-};
-use barter_integration::{channel::Tx, collection::none_one_or_many::NoneOneOrMany, Unrecoverable};
+use crate::v2::{engine::error::EngineError, order::Order};
+use barter_integration::{collection::none_one_or_many::NoneOneOrMany, Unrecoverable};
 use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;

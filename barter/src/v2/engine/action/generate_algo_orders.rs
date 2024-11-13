@@ -1,14 +1,10 @@
-use crate::v2::engine::InstrumentStateManager;
 use crate::v2::{
     engine::{
-        action::send_requests::{send_requests, SendRequestsOutput},
-        execution_tx::ExecutionTxMap,
-        state::StateManager,
-        Engine,
+        action::send_requests::SendRequestsOutput, execution_tx::ExecutionTxMap, Engine,
+        InstrumentStateManager,
     },
     order::{Order, RequestCancel, RequestOpen},
     risk::{RiskApproved, RiskManager, RiskRefused},
-    strategy::Strategy,
 };
 use barter_integration::collection::none_one_or_many::NoneOneOrMany;
 use derive_more::Constructor;
@@ -21,8 +17,7 @@ pub trait GenerateAlgoOrders<ExchangeKey, InstrumentKey> {
 }
 
 impl<State, ExecutionTxs, Strategy, Risk, ExchangeKey, InstrumentKey>
-GenerateAlgoOrders<ExchangeKey, InstrumentKey>
-for Engine<State, ExecutionTxs, Strategy, Risk>
+    GenerateAlgoOrders<ExchangeKey, InstrumentKey> for Engine<State, ExecutionTxs, Strategy, Risk>
 where
     State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
@@ -33,18 +28,13 @@ where
 {
     type Output = GenerateAlgoOrdersOutput<ExchangeKey, InstrumentKey>;
 
-    fn generate_algo_orders(&mut self,) -> Self::Output {
+    fn generate_algo_orders(&mut self) -> Self::Output {
         // Generate orders
-        let (cancels, opens) = self.strategy.generate_orders(
-            &self.state
-        );
+        let (cancels, opens) = self.strategy.generate_orders(&self.state);
 
         // RiskApprove & RiskRefuse order requests
-        let (cancels, opens, refused_cancels, refused_opens) = self.risk.check(
-            &self.state,
-            cancels,
-            opens,
-        );
+        let (cancels, opens, refused_cancels, refused_opens) =
+            self.risk.check(&self.state, cancels, opens);
 
         // Send risk approved order requests
         let cancels = self.send_requests(cancels.into_iter().map(|RiskApproved(cancel)| cancel));

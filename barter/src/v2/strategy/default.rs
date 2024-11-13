@@ -28,31 +28,6 @@ impl<MarketState, ExchangeKey, AssetKey, InstrumentKey>
     ) {
         (std::iter::empty(), std::iter::empty())
     }
-
-    fn close_position_request(
-        &self,
-        _: &InstrumentKey,
-        _: &Self::State,
-        _: &AssetStates,
-        _: &InstrumentStates<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
-    ) -> (
-        impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestCancel>>,
-        impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestOpen>>,
-    ) {
-        (std::iter::empty(), std::iter::empty())
-    }
-
-    fn close_all_positions_request(
-        &self,
-        _: &Self::State,
-        _: &AssetStates,
-        _: &InstrumentStates<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
-    ) -> (
-        impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestCancel>>,
-        impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, RequestOpen>>,
-    ) {
-        (std::iter::empty(), std::iter::empty())
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -61,11 +36,11 @@ pub struct DefaultStrategyState;
 impl<ExchangeKey, AssetKey, InstrumentKey>
     Processor<&AccountEvent<ExchangeKey, AssetKey, InstrumentKey>> for DefaultStrategyState
 {
-    type Output = ();
-    fn process(&mut self, _: &AccountEvent<ExchangeKey, AssetKey, InstrumentKey>) -> Self::Output {}
+    type Audit = ();
+    fn process(&mut self, _: &AccountEvent<ExchangeKey, AssetKey, InstrumentKey>) -> Self::Audit {}
 }
 
 impl<InstrumentKey, Kind> Processor<&MarketEvent<InstrumentKey, Kind>> for DefaultStrategyState {
-    type Output = ();
-    fn process(&mut self, _: &MarketEvent<InstrumentKey, Kind>) -> Self::Output {}
+    type Audit = ();
+    fn process(&mut self, _: &MarketEvent<InstrumentKey, Kind>) -> Self::Audit {}
 }

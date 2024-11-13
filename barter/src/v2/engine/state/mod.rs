@@ -1,4 +1,3 @@
-use crate::v2::engine::state::update::trading_state::TradingState;
 use crate::v2::{
     engine::{
         state::{
@@ -6,9 +5,9 @@ use crate::v2::{
             connectivity::{Connection, ConnectivityState, ConnectivityStates},
             instrument::{InstrumentState, InstrumentStates},
             order_manager::OrderManager,
-            trading_state_updater::TradingState,
+            trading_state_manager::TradingState,
         },
-        Processor,
+        InstrumentStateManager, Processor,
     },
     execution::{manager::AccountStreamEvent, AccountEvent, AccountEventKind},
     order::{Order, RequestCancel, RequestOpen},
@@ -28,16 +27,14 @@ pub mod asset;
 pub mod connectivity;
 pub mod instrument;
 pub mod order_manager;
-mod update;
+pub mod process;
+pub mod trading_state_manager;
+pub mod update;
 // Todo:
 //  - Maybe introduce State machine for dealing with connectivity VecMap issue...
 //    '--> could only check if a new Account/Market event updates to Connected if we are in
 //         State=Unhealthy, that way we are only doing expensive lookup in that case
 //  - Need to make some Key decisions about "what is a manager", and "what is an Updater"
-
-// Todo: Consider splitting AccountEvents into AccountInstrumentEvents, AccountAssetEvent, Other
-//       '--> ideally I can flip Update<AccountEvent> upside down to not duplicate logic
-//       '--> issue becomes more impl Updater for user Strategy & Risk :(
 
 pub type IndexedEngineState<Market, Strategy, Risk> =
     EngineState<Market, Strategy, Risk, ExchangeIndex, AssetIndex, InstrumentIndex>;
@@ -65,10 +62,7 @@ impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
         &mut self,
         cancels: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestCancel>>,
     ) where
-        Self: StateManager<
-            InstrumentKey,
-            State = InstrumentState<Market, ExchangeKey, AssetKey, InstrumentKey>,
-        >,
+        Self: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
         ExchangeKey: Debug + Clone + 'a,
         InstrumentKey: Debug + Clone + 'a,
     {
@@ -83,10 +77,7 @@ impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
         &mut self,
         opens: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestOpen>>,
     ) where
-        Self: StateManager<
-            InstrumentKey,
-            State = InstrumentState<Market, ExchangeKey, AssetKey, InstrumentKey>,
-        >,
+        Self: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
         ExchangeKey: Debug + Clone + 'a,
         InstrumentKey: Debug + Clone + 'a,
     {
@@ -95,29 +86,6 @@ impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
                 .orders
                 .record_in_flight_open(request);
         }
-    }
-
-    pub fn update_from_trading_state_update(&mut self, event: &TradingState) {
-        let next = match (self.trading, event) {
-            (TradingState::Enabled, TradingState::Disabled) => {
-                info!("EngineState setting TradingState::Disabled");
-                TradingState::Disabled
-            }
-            (TradingState::Disabled, TradingState::Enabled) => {
-                info!("EngineState setting TradingState::Enabled");
-                TradingState::Enabled
-            }
-            (TradingState::Enabled, TradingState::Enabled) => {
-                info!("EngineState set TradingState::Enabled, although it was already enabled");
-                TradingState::Enabled
-            }
-            (TradingState::Disabled, TradingState::Disabled) => {
-                info!("EngineState set TradingState::Disabled, although it was already disabled");
-                TradingState::Disabled
-            }
-        };
-
-        self.trading = next;
     }
 
     pub fn update_from_account(

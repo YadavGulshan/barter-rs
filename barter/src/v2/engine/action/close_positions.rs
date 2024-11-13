@@ -1,13 +1,9 @@
 use crate::v2::{
     engine::{
-        action::send_requests::{send_requests, SendRequestsOutput},
-        command::InstrumentFilter,
-        execution_tx::ExecutionTxMap,
-        state::{instrument::InstrumentState, StateManager},
-        Engine,
+        action::send_requests::SendRequestsOutput, command::InstrumentFilter,
+        execution_tx::ExecutionTxMap, Engine, InstrumentStateManager,
     },
     order::{Order, RequestCancel, RequestOpen},
-    risk::RiskManager,
 };
 use derive_more::Constructor;
 use serde::{Deserialize, Serialize};
@@ -28,13 +24,10 @@ pub struct ClosePositionsOutput<ExchangeKey, InstrumentKey> {
     pub opens: SendRequestsOutput<ExchangeKey, InstrumentKey, RequestOpen>,
 }
 
-impl<State, MarketState, ExecutionTxs, Strategy, Risk, ExchangeKey, InstrumentKey, AssetKey>
+impl<State, ExecutionTxs, Strategy, Risk, ExchangeKey, InstrumentKey>
     ClosePositions<ExchangeKey, InstrumentKey> for Engine<State, ExecutionTxs, Strategy, Risk>
 where
-    State: StateManager<
-        InstrumentKey,
-        State = InstrumentState<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
-    >,
+    State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
     Strategy: CloseAllPositionsStrategy<ExchangeKey, InstrumentKey, State = State>,
     ExchangeKey: Debug + Clone,
@@ -47,13 +40,13 @@ where
         filter: &InstrumentFilter<ExchangeKey, InstrumentKey>,
     ) -> Self::Output {
         // Generate orders
-        let (cancels, opens) = self.strategy.close_positions_requests(&filter, &self.state);
+        let (cancels, opens) = self.strategy.close_positions_requests(filter, &self.state);
 
         // Bypass risk checks...
 
         // Send order requests
-        let cancels = send_requests(&self.execution_txs, cancels);
-        let opens = send_requests(&self.execution_txs, opens);
+        let cancels = self.send_requests(cancels);
+        let opens = self.send_requests(opens);
 
         // Record in flight order requests
         self.record_in_flight_cancels(&cancels.sent);

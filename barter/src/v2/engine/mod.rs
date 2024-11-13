@@ -1,30 +1,31 @@
 use crate::v2::{
     engine::{
         action::{
+            cancel_orders::CancelOrders,
             close_positions::{CloseAllPositionsStrategy, ClosePositions},
-            send_requests::send_requests,
+            send_requests::SendRequestsOutput,
             ActionOutput,
         },
-        audit::{Audit, AuditEvent, Auditor},
+        audit::{AuditEvent, Auditor},
         command::{Command, InstrumentFilter},
+        error::{EngineError, RecoverableEngineError, UnrecoverableEngineError},
         execution_tx::ExecutionTxMap,
         state::{
             asset::AssetState,
-            connectivity::ConnectivityState,
             instrument::{market_data::MarketDataState, InstrumentState},
             order_manager::OrderManager,
-            trading_state_updater::TradingState,
+            trading_state_manager::TradingStateManager,
             EngineState, IndexedEngineState, StateManager,
         },
     },
-    execution::AccountEvent,
+    execution::{manager::AccountStreamEvent, ExecutionRequest},
     order::{Order, RequestCancel, RequestOpen},
     risk::RiskManager,
     strategy::Strategy,
     EngineEvent,
 };
-use audit::{request::ExecutionRequestAudit, shutdown::ShutdownAudit};
-use barter_data::event::MarketEvent;
+use audit::shutdown::ShutdownAudit;
+use barter_data::streams::consumer::MarketStreamEvent;
 use barter_instrument::{
     asset::{name::AssetNameInternal, AssetIndex},
     exchange::{ExchangeId, ExchangeIndex},
@@ -32,17 +33,13 @@ use barter_instrument::{
 };
 use barter_integration::{
     channel::{ChannelTxDroppable, Tx},
+    collection::none_one_or_many::NoneOneOrMany,
     Unrecoverable,
 };
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use std::fmt::Debug;
 use tracing::error;
-use barter_integration::collection::none_one_or_many::NoneOneOrMany;
-use crate::v2::engine::action::cancel_orders::CancelOrders;
-use crate::v2::engine::action::send_requests::SendRequestsOutput;
-use crate::v2::engine::error::{EngineError, RecoverableEngineError, UnrecoverableEngineError};
-use crate::v2::execution::ExecutionRequest;
 
 pub mod action;
 pub mod audit;
@@ -50,11 +47,10 @@ pub mod command;
 pub mod error;
 pub mod execution_tx;
 pub mod state;
-mod v2;
 
 pub trait Processor<Event> {
-    type Output;
-    fn process(&mut self, event: Event) -> Self::Output;
+    type Audit;
+    fn process(&mut self, event: Event) -> Self::Audit;
 }
 
 pub fn run<Events, Engine, AuditTx>(
@@ -65,9 +61,9 @@ pub fn run<Events, Engine, AuditTx>(
 where
     Events: Iterator,
     Events::Item: Clone,
-    Engine: Processor<Events::Item> + Auditor<Engine::Output>,
-    Engine::Output: From<Engine::Snapshot> + From<ShutdownAudit<Events::Item>>,
-    AuditTx: Tx<Item = AuditEvent<Engine::Output>>,
+    Engine: Processor<Events::Item> + Auditor<Engine::Audit>,
+    Engine::Audit: From<Engine::Snapshot> + From<ShutdownAudit<Events::Item>>,
+    AuditTx: Tx<Item = AuditEvent<Engine::Audit>>,
 {
     // Send initial Engine state snapshot
     audit_tx.send(engine.build_audit(engine.snapshot()));
@@ -87,13 +83,71 @@ where
     shutdown_audit
 }
 
-pub struct Engine<State, ExecutionTxs, StrategyT, Risk> {
+pub struct Engine<State, ExecutionTxs, Strategy, Risk> {
     pub sequence: u64,
     pub clock: fn() -> DateTime<Utc>,
     pub state: State,
     pub execution_txs: ExecutionTxs,
-    pub strategy: StrategyT,
+    pub strategy: Strategy,
     pub risk: Risk,
+    // pub actual_state:
+}
+
+impl<
+        MarketEventKind,
+        ExchangeKey,
+        AssetKey,
+        InstrumentKey,
+        State,
+        ExecutionTxs,
+        Strategy,
+        Risk,
+    > Processor<EngineEvent<MarketEventKind, ExchangeKey, AssetKey, InstrumentKey>>
+    for Engine<State, ExecutionTxs, Strategy, Risk>
+where
+    State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>
+        + TradingStateManager
+        + for<'a> Processor<&'a MarketStreamEvent<InstrumentKey, MarketEventKind>>
+        + for<'a> Processor<&'a AccountStreamEvent<ExchangeKey, AssetKey, InstrumentKey>>,
+    ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
+    Strategy: CloseAllPositionsStrategy<ExchangeKey, InstrumentKey, State = State>,
+    ExchangeKey: Debug + Clone + PartialEq,
+    InstrumentKey: Debug + Clone + PartialEq,
+{
+    type Audit = ProcessEngineEventAudit;
+
+    fn process(
+        &mut self,
+        event: EngineEvent<MarketEventKind, ExchangeKey, AssetKey, InstrumentKey>,
+    ) -> Self::Audit {
+        match &event {
+            EngineEvent::Shutdown => {
+                todo!()
+            }
+            EngineEvent::Command(command) => {
+                let x = self.action(command);
+            }
+            EngineEvent::TradingStateUpdate(trading_state_update) => {
+                let x = self.state.process(*trading_state_update);
+            }
+            EngineEvent::Account(account) => {
+                let x = self.state.process(account);
+            }
+            EngineEvent::Market(market) => {
+                self.state.process(market);
+            }
+        }
+
+        ProcessEngineEventAudit::Shutdown
+    }
+}
+
+pub enum ProcessEngineEventAudit {
+    Shutdown,
+    Action,
+    TradingState,
+    Account,
+    Market,
 }
 
 impl<State, ExecutionTxs, StrategyT, Risk> Engine<State, ExecutionTxs, StrategyT, Risk> {
@@ -145,99 +199,98 @@ where
     }
 }
 
-impl<ExecutionTxs, MarketState, StrategyT, Risk, ExchangeKey, AssetKey, InstrumentKey>
-    Processor<EngineEvent<MarketState::EventKind, ExchangeKey, AssetKey, InstrumentKey>>
-    for Engine<
-        EngineState<
-            MarketState,
-            StrategyT::State,
-            Risk::State,
-            ExchangeKey,
-            AssetKey,
-            InstrumentKey,
-        >,
-        ExecutionTxs,
-        StrategyT,
-        Risk,
-    >
-where
-    ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
-    MarketState: MarketDataState<InstrumentKey>,
-    StrategyT: Strategy<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
-    StrategyT::State: for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>
-        + for<'a> Processor<&'a MarketEvent<InstrumentKey, MarketState::EventKind>>,
-    Risk: RiskManager<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
-    Risk::State: for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>
-        + for<'a> Processor<&'a MarketEvent<InstrumentKey, MarketState::EventKind>>,
-    ExchangeKey: Debug + Clone,
-    AssetKey: Debug,
-    InstrumentKey: Debug + Clone,
-    EngineState<MarketState, StrategyT::State, Risk::State, ExchangeKey, AssetKey, InstrumentKey>:
-        StateManager<ExchangeId, State = ConnectivityState>
-            + StateManager<AssetKey, State = AssetState>
-            + StateManager<
-                InstrumentKey,
-                State = InstrumentState<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
-            >,
-{
-    type Output = Audit<
-        EngineState<
-            MarketState,
-            StrategyT::State,
-            Risk::State,
-            ExchangeKey,
-            AssetKey,
-            InstrumentKey,
-        >,
-        EngineEvent<MarketState::EventKind, ExchangeKey, AssetKey, InstrumentKey>,
-        ExecutionRequestAudit<ExchangeKey, InstrumentKey>,
-    >;
-
-    fn process(
-        &mut self,
-        event: EngineEvent<MarketState::EventKind, ExchangeKey, AssetKey, InstrumentKey>,
-    ) -> Self::Output {
-        match &event {
-            EngineEvent::Shutdown => return Audit::Shutdown(ShutdownAudit::Commanded(event)),
-            EngineEvent::Command(command) => {
-                let output = self.action(command);
-
-                return if let Some(unrecoverable) = output.unrecoverable_errors() {
-                    Audit::ShutdownWithOutput(ShutdownAudit::Error(event, unrecoverable), output)
-                } else {
-                    Audit::ProcessWithOutput(event, output)
-                };
-            }
-            EngineEvent::TradingStateUpdate(trading_state) => {
-                self.state.update_from_trading_state_update(trading_state);
-            }
-            EngineEvent::Account(account) => {
-                self.state.update_from_account(account);
-            }
-            EngineEvent::Market(market) => {
-                self.state.update_from_market(market);
-            }
-        };
-
-        if let TradingState::Enabled = self.state.trading {
-            let output = self.trade();
-
-            if let Some(unrecoverable) = output.unrecoverable_errors() {
-                Audit::ShutdownWithOutput(ShutdownAudit::Error(event, unrecoverable), output)
-            } else {
-                Audit::ProcessWithOutput(event, output)
-            }
-        } else {
-            Audit::Process(event)
-        }
-    }
-}
+// impl<ExecutionTxs, MarketState, StrategyT, Risk, ExchangeKey, AssetKey, InstrumentKey>
+//     Processor<EngineEvent<MarketState::EventKind, ExchangeKey, AssetKey, InstrumentKey>>
+//     for Engine<
+//         EngineState<
+//             MarketState,
+//             StrategyT::State,
+//             Risk::State,
+//             ExchangeKey,
+//             AssetKey,
+//             InstrumentKey,
+//         >,
+//         ExecutionTxs,
+//         StrategyT,
+//         Risk,
+//     >
+// where
+//     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
+//     MarketState: MarketDataState<InstrumentKey>,
+//     StrategyT: Strategy<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
+//     StrategyT::State: for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>
+//         + for<'a> Processor<&'a MarketEvent<InstrumentKey, MarketState::EventKind>>,
+//     Risk: RiskManager<ExchangeKey, AssetKey>,
+//     Risk::State: for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>
+//         + for<'a> Processor<&'a MarketEvent<InstrumentKey, MarketState::EventKind>>,
+//     ExchangeKey: Debug + Clone,
+//     AssetKey: Debug,
+//     InstrumentKey: Debug + Clone,
+//     EngineState<MarketState, StrategyT::State, Risk::State, ExchangeKey, AssetKey, InstrumentKey>:
+//         StateManager<ExchangeId, State = ConnectivityState>
+//             + StateManager<AssetKey, State = AssetState>
+//             + StateManager<
+//                 InstrumentKey,
+//                 State = InstrumentState<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
+//             >,
+// {
+//     type Audit = Audit<
+//         EngineState<
+//             MarketState,
+//             StrategyT::State,
+//             Risk::State,
+//             ExchangeKey,
+//             AssetKey,
+//             InstrumentKey,
+//         >,
+//         EngineEvent<MarketState::EventKind, ExchangeKey, AssetKey, InstrumentKey>,
+//         ExecutionRequestAudit<ExchangeKey, InstrumentKey>,
+//     >;
+//
+//     fn process(
+//         &mut self,
+//         event: EngineEvent<MarketState::EventKind, ExchangeKey, AssetKey, InstrumentKey>,
+//     ) -> Self::Audit {
+//         match &event {
+//             EngineEvent::Shutdown => return Audit::Shutdown(ShutdownAudit::Commanded(event)),
+//             EngineEvent::Command(command) => {
+//                 let output = self.action(command);
+//
+//                 return if let Some(unrecoverable) = output.unrecoverable_errors() {
+//                     Audit::ShutdownWithOutput(ShutdownAudit::Error(event, unrecoverable), output)
+//                 } else {
+//                     Audit::ProcessWithOutput(event, output)
+//                 };
+//             }
+//             EngineEvent::TradingStateUpdate(trading_state) => {
+//                 self.state.update_from_trading_state_update(trading_state);
+//             }
+//             EngineEvent::Account(account) => {
+//                 self.state.update_from_account(account);
+//             }
+//             EngineEvent::Market(market) => {
+//                 self.state.update_from_market(market);
+//             }
+//         };
+//
+//         if let TradingState::Enabled = self.state.trading {
+//             let output = self.trade();
+//
+//             if let Some(unrecoverable) = output.unrecoverable_errors() {
+//                 Audit::ShutdownWithOutput(ShutdownAudit::Error(event, unrecoverable), output)
+//             } else {
+//                 Audit::ProcessWithOutput(event, output)
+//             }
+//         } else {
+//             Audit::Process(event)
+//         }
+//     }
+// }
 
 pub type SendResult<ExchangeKey, InstrumentKey, Kind> = Result<
-    Order<ExchangeKey, InstrumentKey, Kind>, 
-    (Order<ExchangeKey, InstrumentKey, Kind>, EngineError)
+    Order<ExchangeKey, InstrumentKey, Kind>,
+    (Order<ExchangeKey, InstrumentKey, Kind>, EngineError),
 >;
-
 
 impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, Risk> {
     pub fn action<ExchangeKey, InstrumentKey>(
@@ -245,7 +298,7 @@ impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, 
         command: &Command<ExchangeKey, InstrumentKey>,
     ) -> ActionOutput<ExchangeKey, InstrumentKey>
     where
-        State: InstrumentStateManager<InstrumentKey>,
+        State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
         ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
         Strategy: CloseAllPositionsStrategy<ExchangeKey, InstrumentKey, State = State>,
         ExchangeKey: Debug + Clone + PartialEq,
@@ -253,28 +306,32 @@ impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, 
     {
         match &command {
             Command::SendCancelRequests(requests) => {
-                let output = self.send_requests(requests);
+                let output = self.send_requests(requests.clone());
                 self.record_in_flight_cancels(&output.sent);
                 ActionOutput::CancelOrders(output)
             }
             Command::SendOpenRequests(requests) => {
-                let output = self.send_requests(requests);
+                let output = self.send_requests(requests.clone());
                 self.record_in_flight_opens(&output.sent);
                 ActionOutput::OpenOrders(output)
             }
             Command::ClosePositions(filter) => {
                 ActionOutput::ClosePositions(self.close_positions(filter))
             }
-            Command::CancelOrders(filter) => {
-                ActionOutput::CancelOrders(self.cancel_orders(filter))
-            }
+            Command::CancelOrders(filter) => ActionOutput::CancelOrders(self.cancel_orders(filter)),
         }
     }
-    
+
     pub fn send_requests<ExchangeKey, InstrumentKey, Kind>(
-        &self, 
-        requests: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, Kind>>
+        &self,
+        requests: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, Kind>>,
     ) -> SendRequestsOutput<ExchangeKey, InstrumentKey, Kind>
+    where
+        ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
+        ExchangeKey: Debug + Clone,
+        InstrumentKey: Debug + Clone,
+        Kind: Debug + Clone,
+        ExecutionRequest<ExchangeKey, InstrumentKey>: From<Order<ExchangeKey, InstrumentKey, Kind>>,
     {
         // Send order requests
         let (sent, errors): (Vec<_>, Vec<_>) = requests
@@ -288,10 +345,10 @@ impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, 
 
         SendRequestsOutput::new(NoneOneOrMany::from(sent), NoneOneOrMany::from(errors))
     }
-    
+
     pub fn send_request<ExchangeKey, InstrumentKey, Kind>(
         &self,
-        request: &Order<ExchangeKey, InstrumentKey, Kind>
+        request: &Order<ExchangeKey, InstrumentKey, Kind>,
     ) -> Result<(), EngineError>
     where
         ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
@@ -313,9 +370,12 @@ impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, 
                     ?error,
                     "failed to send ExecutionRequest due to terminated channel"
                 );
-                Err(EngineError::Unrecoverable(UnrecoverableEngineError::ExecutionChannelTerminated(
-                    format!("{:?} execution channel terminated: {:?}", request.exchange, error)
-                )))
+                Err(EngineError::Unrecoverable(
+                    UnrecoverableEngineError::ExecutionChannelTerminated(format!(
+                        "{:?} execution channel terminated: {:?}",
+                        request.exchange, error
+                    )),
+                ))
             }
             Err(error) => {
                 error!(
@@ -324,18 +384,21 @@ impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, 
                     ?error,
                     "failed to send ExecutionRequest due to unhealthy channel"
                 );
-                Err(EngineError::Recoverable(RecoverableEngineError::ExecutionChannelUnhealthy(
-                    format!("{:?} execution channel unhealthy: {:?}", request.exchange, error)
-                )))
+                Err(EngineError::Recoverable(
+                    RecoverableEngineError::ExecutionChannelUnhealthy(format!(
+                        "{:?} execution channel unhealthy: {:?}",
+                        request.exchange, error
+                    )),
+                ))
             }
         }
     }
-    
+
     pub fn record_in_flight_cancels<'a, ExchangeKey, InstrumentKey>(
         &mut self,
         requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestCancel>>,
     ) where
-        State: InstrumentStateManager<InstrumentKey>,
+        State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
         ExchangeKey: Debug + Clone + 'a,
         InstrumentKey: Debug + Clone + 'a,
     {
@@ -351,7 +414,7 @@ impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, 
         &mut self,
         requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestOpen>>,
     ) where
-        State: InstrumentStateManager<InstrumentKey>,
+        State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
         ExchangeKey: Debug + Clone + 'a,
         InstrumentKey: Debug + Clone + 'a,
     {
@@ -361,7 +424,6 @@ impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, 
                 .orders
                 .record_in_flight_open(request);
         }
-    }
     }
 }
 
@@ -384,7 +446,7 @@ where
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
     MarketState: MarketDataState<InstrumentKey>,
     StrategyT: Strategy<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
-    Risk: RiskManager<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
+    Risk: RiskManager<ExchangeKey, InstrumentKey>,
     ExchangeKey: Debug + Clone,
     InstrumentKey: Debug + Clone,
     EngineState<MarketState, StrategyT::State, Risk::State, ExchangeKey, AssetKey, InstrumentKey>:
@@ -675,16 +737,23 @@ pub trait InstrumentStateManager<InstrumentKey> {
         &self,
         key: &InstrumentKey,
     ) -> &InstrumentState<Self::MarketState, Self::Exchange, Self::Asset, InstrumentKey>;
+
     fn state_mut(
         &mut self,
         key: &InstrumentKey,
     ) -> &mut InstrumentState<Self::MarketState, Self::Exchange, Self::Asset, InstrumentKey>;
-    fn states_by_filter(
-        &self,
+
+    fn states_by_filter<'a>(
+        &'a self,
         filter: &InstrumentFilter<Self::Exchange, InstrumentKey>,
     ) -> impl Iterator<
-        Item = InstrumentState<Self::MarketState, Self::Exchange, Self::Asset, InstrumentKey>,
-    >;
+        Item = &'a InstrumentState<Self::MarketState, Self::Exchange, Self::Asset, InstrumentKey>,
+    >
+    where
+        Self::MarketState: 'a,
+        Self::Exchange: 'a,
+        Self::Asset: 'a,
+        InstrumentKey: 'a;
 }
 
 impl<MarketState, Strategy, Risk> InstrumentStateManager<InstrumentIndex>
@@ -710,10 +779,12 @@ where
         todo!()
     }
 
-    fn states_by_filter(
-        &self,
+    fn states_by_filter<'a>(
+        &'a self,
         filter: &InstrumentFilter<ExchangeIndex, InstrumentIndex>,
-    ) -> impl Iterator<Item = InstrumentState<MarketState, ExchangeIndex, AssetIndex, InstrumentIndex>>
+    ) -> impl Iterator<Item = &'a InstrumentState<MarketState, ExchangeIndex, AssetIndex, InstrumentIndex>>
+    where
+        MarketState: 'a,
     {
         std::iter::empty()
     }
@@ -750,12 +821,20 @@ where
         todo!()
     }
 
-    fn states_by_filter(
-        &self,
+    fn states_by_filter<'a>(
+        &'a self,
         filter: &InstrumentFilter<ExchangeId, InstrumentNameInternal>,
     ) -> impl Iterator<
-        Item = InstrumentState<MarketState, ExchangeId, AssetNameInternal, InstrumentNameInternal>,
-    > {
+        Item = &'a InstrumentState<
+            MarketState,
+            ExchangeId,
+            AssetNameInternal,
+            InstrumentNameInternal,
+        >,
+    >
+    where
+        MarketState: 'a,
+    {
         std::iter::empty()
     }
 }

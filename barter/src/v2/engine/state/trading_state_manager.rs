@@ -1,11 +1,6 @@
-use crate::v2::engine::state::EngineState;
+use crate::v2::engine::{state::EngineState, Processor};
 use serde::{Deserialize, Serialize};
 use tracing::info;
-
-pub trait TradingStateUpdater {
-    type Audit;
-    fn update_from_trading_state_update(&mut self, event: TradingState) -> Self::Audit;
-}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
 pub enum TradingState {
@@ -13,17 +8,19 @@ pub enum TradingState {
     Disabled,
 }
 
-pub struct TradingStateUpdaterAudit {
-    pub prev: TradingState,
-    pub current: TradingState,
+pub trait TradingStateManager
+where
+    Self: Processor<TradingState, Audit = ProcessTradingStateAudit>,
+{
+    fn state(&self) -> TradingState;
 }
 
-impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey> TradingStateUpdater
-for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
+impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey> Processor<TradingState>
+    for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
 {
-    type Audit = Option<TradingStateUpdaterAudit>;
+    type Audit = ProcessTradingStateAudit;
 
-    fn update_from_trading_state_update(&mut self, event: TradingState) -> Self::Audit {
+    fn process(&mut self, event: TradingState) -> Self::Audit {
         let prev = self.trading;
         let next = match (self.trading, event) {
             (TradingState::Enabled, TradingState::Disabled) => {
@@ -44,14 +41,25 @@ for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
             }
         };
 
-        if prev != next {
-            self.trading = next;
-            Some(TradingStateUpdaterAudit {
-                prev,
-                current: self.trading,
-            })
-        } else {
-            None
+        self.trading = next;
+
+        ProcessTradingStateAudit {
+            prev,
+            current: next,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
+pub struct ProcessTradingStateAudit {
+    pub prev: TradingState,
+    pub current: TradingState,
+}
+
+impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey> TradingStateManager
+    for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
+{
+    fn state(&self) -> TradingState {
+        self.trading
     }
 }

@@ -15,4 +15,5 @@ pub enum InstrumentFilter<ExchangeKey, InstrumentKey> {
     None,
     Exchanges(OneOrMany<ExchangeKey>),
     Instruments(OneOrMany<InstrumentKey>),
+    // Underlying(OneOrMany<Underlying<AssetKey>>)
 }
