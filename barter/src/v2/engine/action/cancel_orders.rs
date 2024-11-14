@@ -5,7 +5,7 @@ use crate::v2::{
         execution_tx::ExecutionTxMap,
         state::{
             order_manager::{InFlightRequestRecorder, OrderManager},
-            InstrumentManager,
+            InstrumentStateManager,
         },
         Engine,
     },
@@ -25,7 +25,7 @@ pub trait CancelOrders<ExchangeKey, InstrumentKey> {
 impl<State, ExecutionTxs, Strategy, Risk, ExchangeKey, InstrumentKey>
     CancelOrders<ExchangeKey, InstrumentKey> for Engine<State, ExecutionTxs, Strategy, Risk>
 where
-    State: InstrumentManager<InstrumentKey, ExchangeKey = ExchangeKey>
+    State: InstrumentStateManager<InstrumentKey, ExchangeKey = ExchangeKey>
         + InFlightRequestRecorder<ExchangeKey, InstrumentKey>,
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
     ExchangeKey: Debug + Clone + PartialEq,

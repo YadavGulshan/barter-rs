@@ -8,7 +8,7 @@ use crate::v2::{
         },
         command::Command,
         execution_tx::ExecutionTxMap,
-        state::{order_manager::InFlightRequestRecorder, InstrumentManager},
+        state::{order_manager::InFlightRequestRecorder, InstrumentStateManager},
         Engine,
     },
     order::{RequestCancel, RequestOpen},
@@ -28,7 +28,7 @@ impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, 
         command: &Command<ExchangeKey, InstrumentKey>,
     ) -> ActionOutput<ExchangeKey, InstrumentKey>
     where
-        State: InstrumentManager<InstrumentKey, ExchangeKey = ExchangeKey>
+        State: InstrumentStateManager<InstrumentKey, ExchangeKey = ExchangeKey>
             + InFlightRequestRecorder<ExchangeKey, InstrumentKey>,
         ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
         Strategy: ClosePositionsStrategy<ExchangeKey, InstrumentKey, State = State>,

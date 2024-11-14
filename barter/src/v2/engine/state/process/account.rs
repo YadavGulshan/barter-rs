@@ -1,8 +1,8 @@
 use crate::v2::{
     engine::{
         state::{
-            connectivity::Connection, order_manager::OrderManager, AssetManager,
-            ConnectivityManager, EngineState, InstrumentManager,
+            connectivity::Connection, order_manager::OrderManager, AssetStateManager,
+            ConnectivityManager, EngineState, InstrumentStateManager,
         },
         Processor,
     },
@@ -18,8 +18,8 @@ impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
 where
     Self: ConnectivityManager<ExchangeId>
-        + AssetManager<AssetKey>
-        + InstrumentManager<InstrumentKey, ExchangeKey = ExchangeKey, AssetKey = AssetKey>,
+        + AssetStateManager<AssetKey>
+        + InstrumentStateManager<InstrumentKey, ExchangeKey = ExchangeKey, AssetKey = AssetKey>,
     Strategy: for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>,
     Risk: for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>,
     ExchangeKey: Debug + Clone,

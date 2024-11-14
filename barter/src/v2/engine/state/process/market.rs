@@ -1,5 +1,5 @@
 use crate::v2::engine::{
-    state::{connectivity::Connection, ConnectivityManager, EngineState, InstrumentManager},
+    state::{connectivity::Connection, ConnectivityManager, EngineState, InstrumentStateManager},
     Processor,
 };
 use barter_data::{event::MarketEvent, streams::consumer::MarketStreamEvent};
@@ -10,7 +10,7 @@ impl<Kind, Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
     Processor<&MarketStreamEvent<InstrumentKey, Kind>>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
 where
-    Self: ConnectivityManager<ExchangeId> + InstrumentManager<InstrumentKey, Market = Market>,
+    Self: ConnectivityManager<ExchangeId> + InstrumentStateManager<InstrumentKey, Market = Market>,
     Market: for<'a> Processor<&'a MarketEvent<InstrumentKey, Kind>>,
     Strategy: for<'a> Processor<&'a MarketEvent<InstrumentKey, Kind>>,
     Risk: for<'a> Processor<&'a MarketEvent<InstrumentKey, Kind>>,

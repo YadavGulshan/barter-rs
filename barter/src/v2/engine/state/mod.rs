@@ -38,12 +38,12 @@ pub trait ConnectivityManager<ExchangeKey> {
     fn connectivity_mut(&mut self, key: &ExchangeKey) -> &mut ConnectivityState;
 }
 
-pub trait AssetManager<AssetKey> {
+pub trait AssetStateManager<AssetKey> {
     fn asset(&self, key: &AssetKey) -> &AssetState;
     fn asset_mut(&mut self, key: &AssetKey) -> &mut AssetState;
 }
 
-pub trait InstrumentManager<InstrumentKey> {
+pub trait InstrumentStateManager<InstrumentKey> {
     type ExchangeKey;
     type AssetKey;
     type Market;
@@ -81,10 +81,8 @@ pub struct EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, Instrument
     pub risk: Risk,
 }
 
-impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
-    EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
-{
-}
+// Todo: probably implement processor here, and move Manager impls elsewhere. Probably with 
+//  Manager traits somewhere else, too.
 
 impl<Market, Strategy, Risk, AssetKey, InstrumentKey> ConnectivityManager<ExchangeIndex>
     for EngineState<Market, Strategy, Risk, ExchangeIndex, AssetKey, InstrumentKey>
@@ -124,7 +122,7 @@ impl<Market, Strategy, Risk, AssetKey, InstrumentKey> ConnectivityManager<Exchan
     }
 }
 
-impl<Market, Strategy, Risk, ExchangeKey, InstrumentKey> AssetManager<AssetIndex>
+impl<Market, Strategy, Risk, ExchangeKey, InstrumentKey> AssetStateManager<AssetIndex>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetIndex, InstrumentKey>
 {
     fn asset(&self, key: &AssetIndex) -> &AssetState {
@@ -145,7 +143,7 @@ impl<Market, Strategy, Risk, ExchangeKey, InstrumentKey> AssetManager<AssetIndex
 }
 
 impl<Market, Strategy, Risk, ExchangeKey, InstrumentKey>
-    AssetManager<ExchangeAsset<AssetNameInternal>>
+    AssetStateManager<ExchangeAsset<AssetNameInternal>>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetNameInternal, InstrumentKey>
 {
     fn asset(&self, key: &ExchangeAsset<AssetNameInternal>) -> &AssetState {
@@ -163,7 +161,7 @@ impl<Market, Strategy, Risk, ExchangeKey, InstrumentKey>
     }
 }
 
-impl<Market, Strategy, Risk, ExchangeKey, AssetKey> InstrumentManager<InstrumentIndex>
+impl<Market, Strategy, Risk, ExchangeKey, AssetKey> InstrumentStateManager<InstrumentIndex>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentIndex>
 {
     type ExchangeKey = ExchangeKey;
@@ -219,7 +217,7 @@ impl<Market, Strategy, Risk, ExchangeKey, AssetKey> InstrumentManager<Instrument
     }
 }
 
-impl<Market, Strategy, Risk, ExchangeKey, AssetKey> InstrumentManager<InstrumentNameInternal>
+impl<Market, Strategy, Risk, ExchangeKey, AssetKey> InstrumentStateManager<InstrumentNameInternal>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentNameInternal>
 {
     type ExchangeKey = ExchangeKey;
