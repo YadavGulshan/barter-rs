@@ -12,18 +12,40 @@ use serde::{Deserialize, Serialize};
 use std::{collections::hash_map::Entry, fmt::Debug};
 use tracing::{debug, error, warn};
 
-pub trait OrderManager<ExchangeKey, InstrumentKey> {
+pub trait InFlightRequestRecorder<ExchangeKey, InstrumentKey> {
+    fn record_in_flight_cancels<'a>(
+        &mut self,
+        requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestCancel>>,
+    ) {
+        requests.into_iter().for_each(Self::record_in_flight_cancel)
+    }
+
+    fn record_in_flight_opens<'a>(
+        &mut self,
+        requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestOpen>>,
+    ) {
+        requests.into_iter().for_each(Self::record_in_flight_open)
+    }
+
+    fn record_in_flight_cancel(
+        &mut self,
+        request: &Order<ExchangeKey, InstrumentKey, RequestCancel>,
+    );
+
+    fn record_in_flight_open(&mut self, request: &Order<ExchangeKey, InstrumentKey, RequestOpen>);
+}
+
+pub trait OrderManager<ExchangeKey, InstrumentKey>
+where
+    Self: InFlightRequestRecorder<ExchangeKey, InstrumentKey>,
+{
     fn orders<'a>(
         &'a self,
     ) -> impl Iterator<Item = &'a Order<ExchangeKey, InstrumentKey, InternalOrderState>>
     where
         ExchangeKey: 'a,
         InstrumentKey: 'a;
-    fn record_in_flight_cancel(
-        &mut self,
-        request: &Order<ExchangeKey, InstrumentKey, RequestCancel>,
-    );
-    fn record_in_flight_open(&mut self, request: &Order<ExchangeKey, InstrumentKey, RequestOpen>);
+
     fn update_from_open<AssetKey>(
         &mut self,
         response: &Order<
@@ -33,6 +55,7 @@ pub trait OrderManager<ExchangeKey, InstrumentKey> {
         >,
     ) where
         AssetKey: Debug;
+
     fn update_from_cancel<AssetKey>(
         &mut self,
         response: &Order<
@@ -42,10 +65,12 @@ pub trait OrderManager<ExchangeKey, InstrumentKey> {
         >,
     ) where
         AssetKey: Debug;
+
     fn update_from_order_snapshot(
         &mut self,
         snapshot: Snapshot<&Order<ExchangeKey, InstrumentKey, ExchangeOrderState>>,
     );
+
     fn update_from_opens_snapshot(
         &mut self,
         snapshot: Snapshot<&Vec<Order<ExchangeKey, InstrumentKey, Open>>>,
@@ -63,22 +88,9 @@ impl<ExchangeKey, InstrumentKey> Default for Orders<ExchangeKey, InstrumentKey> 
     }
 }
 
-impl<ExchangeKey, InstrumentKey> OrderManager<ExchangeKey, InstrumentKey>
+impl<ExchangeKey, InstrumentKey> InFlightRequestRecorder<ExchangeKey, InstrumentKey>
     for Orders<ExchangeKey, InstrumentKey>
-where
-    ExchangeKey: Debug + Clone,
-    InstrumentKey: Debug + Clone,
 {
-    fn orders<'a>(
-        &'a self,
-    ) -> impl Iterator<Item = &'a Order<ExchangeKey, InstrumentKey, InternalOrderState>>
-    where
-        ExchangeKey: 'a,
-        InstrumentKey: 'a,
-    {
-        self.0.values()
-    }
-
     fn record_in_flight_cancel(
         &mut self,
         request: &Order<ExchangeKey, InstrumentKey, RequestCancel>,
@@ -100,6 +112,23 @@ where
                 "OrderManager upserted Order OpenInFlight with duplicate ClientOrderId"
             );
         }
+    }
+}
+
+impl<ExchangeKey, InstrumentKey> OrderManager<ExchangeKey, InstrumentKey>
+    for Orders<ExchangeKey, InstrumentKey>
+where
+    ExchangeKey: Debug + Clone,
+    InstrumentKey: Debug + Clone,
+{
+    fn orders<'a>(
+        &'a self,
+    ) -> impl Iterator<Item = &'a Order<ExchangeKey, InstrumentKey, InternalOrderState>>
+    where
+        ExchangeKey: 'a,
+        InstrumentKey: 'a,
+    {
+        self.0.values()
     }
 
     fn update_from_open<AssetKey>(

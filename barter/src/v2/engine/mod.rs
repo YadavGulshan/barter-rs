@@ -2,7 +2,7 @@ use crate::v2::{
     engine::{
         action::{
             cancel_orders::CancelOrders,
-            close_positions::{CloseAllPositionsStrategy, ClosePositions},
+            close_positions::{ClosePositions, ClosePositionsStrategy},
             send_requests::SendRequestsOutput,
             ActionOutput,
         },
@@ -11,11 +11,10 @@ use crate::v2::{
         error::{EngineError, RecoverableEngineError, UnrecoverableEngineError},
         execution_tx::ExecutionTxMap,
         state::{
-            asset::AssetState,
             instrument::{market_data::MarketDataState, InstrumentState},
             order_manager::OrderManager,
             trading_state_manager::TradingStateManager,
-            EngineState, IndexedEngineState, StateManager,
+            EngineState, IndexedEngineState,
         },
     },
     execution::{manager::AccountStreamEvent, ExecutionRequest},
@@ -105,12 +104,11 @@ impl<
     > Processor<EngineEvent<MarketEventKind, ExchangeKey, AssetKey, InstrumentKey>>
     for Engine<State, ExecutionTxs, Strategy, Risk>
 where
-    State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>
-        + TradingStateManager
+    State: TradingStateManager
         + for<'a> Processor<&'a MarketStreamEvent<InstrumentKey, MarketEventKind>>
         + for<'a> Processor<&'a AccountStreamEvent<ExchangeKey, AssetKey, InstrumentKey>>,
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
-    Strategy: CloseAllPositionsStrategy<ExchangeKey, InstrumentKey, State = State>,
+    Strategy: ClosePositionsStrategy<ExchangeKey, InstrumentKey, State = State>,
     ExchangeKey: Debug + Clone + PartialEq,
     InstrumentKey: Debug + Clone + PartialEq,
 {
@@ -286,226 +284,3 @@ where
 //         }
 //     }
 // }
-
-pub type SendResult<ExchangeKey, InstrumentKey, Kind> = Result<
-    Order<ExchangeKey, InstrumentKey, Kind>,
-    (Order<ExchangeKey, InstrumentKey, Kind>, EngineError),
->;
-
-impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, Risk> {
-    pub fn action<ExchangeKey, InstrumentKey>(
-        &mut self,
-        command: &Command<ExchangeKey, InstrumentKey>,
-    ) -> ActionOutput<ExchangeKey, InstrumentKey>
-    where
-        State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
-        ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
-        Strategy: CloseAllPositionsStrategy<ExchangeKey, InstrumentKey, State = State>,
-        ExchangeKey: Debug + Clone + PartialEq,
-        InstrumentKey: Debug + Clone + PartialEq,
-    {
-        match &command {
-            Command::SendCancelRequests(requests) => {
-                let output = self.send_requests(requests.clone());
-                self.record_in_flight_cancels(&output.sent);
-                ActionOutput::CancelOrders(output)
-            }
-            Command::SendOpenRequests(requests) => {
-                let output = self.send_requests(requests.clone());
-                self.record_in_flight_opens(&output.sent);
-                ActionOutput::OpenOrders(output)
-            }
-            Command::ClosePositions(filter) => {
-                ActionOutput::ClosePositions(self.close_positions(filter))
-            }
-            Command::CancelOrders(filter) => ActionOutput::CancelOrders(self.cancel_orders(filter)),
-        }
-    }
-
-    pub fn send_requests<ExchangeKey, InstrumentKey, Kind>(
-        &self,
-        requests: impl IntoIterator<Item = Order<ExchangeKey, InstrumentKey, Kind>>,
-    ) -> SendRequestsOutput<ExchangeKey, InstrumentKey, Kind>
-    where
-        ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
-        ExchangeKey: Debug + Clone,
-        InstrumentKey: Debug + Clone,
-        Kind: Debug + Clone,
-        ExecutionRequest<ExchangeKey, InstrumentKey>: From<Order<ExchangeKey, InstrumentKey, Kind>>,
-    {
-        // Send order requests
-        let (sent, errors): (Vec<_>, Vec<_>) = requests
-            .into_iter()
-            .map(|request| {
-                self.send_request(&request)
-                    .map_err(|error| (request.clone(), error))
-                    .map(|_| request)
-            })
-            .partition_result();
-
-        SendRequestsOutput::new(NoneOneOrMany::from(sent), NoneOneOrMany::from(errors))
-    }
-
-    pub fn send_request<ExchangeKey, InstrumentKey, Kind>(
-        &self,
-        request: &Order<ExchangeKey, InstrumentKey, Kind>,
-    ) -> Result<(), EngineError>
-    where
-        ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
-        ExchangeKey: Debug + Clone,
-        InstrumentKey: Debug + Clone,
-        Kind: Debug + Clone,
-        ExecutionRequest<ExchangeKey, InstrumentKey>: From<Order<ExchangeKey, InstrumentKey, Kind>>,
-    {
-        match self
-            .execution_txs
-            .find(&request.exchange)?
-            .send(ExecutionRequest::from(request.clone()))
-        {
-            Ok(()) => Ok(()),
-            Err(error) if error.is_unrecoverable() => {
-                error!(
-                    exchange = ?request.exchange,
-                    ?request,
-                    ?error,
-                    "failed to send ExecutionRequest due to terminated channel"
-                );
-                Err(EngineError::Unrecoverable(
-                    UnrecoverableEngineError::ExecutionChannelTerminated(format!(
-                        "{:?} execution channel terminated: {:?}",
-                        request.exchange, error
-                    )),
-                ))
-            }
-            Err(error) => {
-                error!(
-                    exchange = ?request.exchange,
-                    ?request,
-                    ?error,
-                    "failed to send ExecutionRequest due to unhealthy channel"
-                );
-                Err(EngineError::Recoverable(
-                    RecoverableEngineError::ExecutionChannelUnhealthy(format!(
-                        "{:?} execution channel unhealthy: {:?}",
-                        request.exchange, error
-                    )),
-                ))
-            }
-        }
-    }
-
-    pub fn record_in_flight_cancels<'a, ExchangeKey, InstrumentKey>(
-        &mut self,
-        requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestCancel>>,
-    ) where
-        State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
-        ExchangeKey: Debug + Clone + 'a,
-        InstrumentKey: Debug + Clone + 'a,
-    {
-        for request in requests.into_iter() {
-            self.state
-                .state_mut(&request.instrument)
-                .orders
-                .record_in_flight_cancel(request);
-        }
-    }
-
-    pub fn record_in_flight_opens<'a, ExchangeKey, InstrumentKey>(
-        &mut self,
-        requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestOpen>>,
-    ) where
-        State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
-        ExchangeKey: Debug + Clone + 'a,
-        InstrumentKey: Debug + Clone + 'a,
-    {
-        for request in requests.into_iter() {
-            self.state
-                .state_mut(&request.instrument)
-                .orders
-                .record_in_flight_open(request);
-        }
-    }
-}
-
-impl<MarketState, Strategy, Risk> InstrumentStateManager<InstrumentIndex>
-    for IndexedEngineState<MarketState, Strategy, Risk>
-where
-    MarketState: Debug + Clone,
-{
-    type MarketState = MarketState;
-    type Exchange = ExchangeIndex;
-    type Asset = AssetIndex;
-
-    fn state(
-        &self,
-        key: &InstrumentIndex,
-    ) -> &InstrumentState<MarketState, ExchangeIndex, AssetIndex, InstrumentIndex> {
-        todo!()
-    }
-
-    fn state_mut(
-        &mut self,
-        key: &InstrumentIndex,
-    ) -> &mut InstrumentState<MarketState, ExchangeIndex, AssetIndex, InstrumentIndex> {
-        todo!()
-    }
-
-    fn states_by_filter<'a>(
-        &'a self,
-        filter: &InstrumentFilter<ExchangeIndex, InstrumentIndex>,
-    ) -> impl Iterator<Item = &'a InstrumentState<MarketState, ExchangeIndex, AssetIndex, InstrumentIndex>>
-    where
-        MarketState: 'a,
-    {
-        std::iter::empty()
-    }
-}
-
-impl<MarketState, Strategy, Risk> InstrumentStateManager<InstrumentNameInternal>
-    for EngineState<
-        MarketState,
-        Strategy,
-        Risk,
-        ExchangeId,
-        AssetNameInternal,
-        InstrumentNameInternal,
-    >
-where
-    MarketState: Debug + Clone,
-{
-    type MarketState = MarketState;
-    type Exchange = ExchangeId;
-    type Asset = AssetNameInternal;
-
-    fn state(
-        &self,
-        key: &InstrumentNameInternal,
-    ) -> &InstrumentState<MarketState, ExchangeId, AssetNameInternal, InstrumentNameInternal> {
-        todo!()
-    }
-
-    fn state_mut(
-        &mut self,
-        key: &InstrumentNameInternal,
-    ) -> &mut InstrumentState<MarketState, ExchangeId, AssetNameInternal, InstrumentNameInternal>
-    {
-        todo!()
-    }
-
-    fn states_by_filter<'a>(
-        &'a self,
-        filter: &InstrumentFilter<ExchangeId, InstrumentNameInternal>,
-    ) -> impl Iterator<
-        Item = &'a InstrumentState<
-            MarketState,
-            ExchangeId,
-            AssetNameInternal,
-            InstrumentNameInternal,
-        >,
-    >
-    where
-        MarketState: 'a,
-    {
-        std::iter::empty()
-    }
-}

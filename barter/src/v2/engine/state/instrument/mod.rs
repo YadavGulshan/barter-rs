@@ -15,34 +15,6 @@ use std::fmt::Debug;
 
 pub mod market_data;
 
-pub trait InstrumentStateManager<InstrumentKey> {
-    type MarketState: Debug + Clone;
-    type Exchange: Debug + Clone;
-    type Asset: Debug + Clone;
-
-    fn state(
-        &self,
-        key: &InstrumentKey,
-    ) -> &InstrumentState<Self::MarketState, Self::Exchange, Self::Asset, InstrumentKey>;
-
-    fn state_mut(
-        &mut self,
-        key: &InstrumentKey,
-    ) -> &mut InstrumentState<Self::MarketState, Self::Exchange, Self::Asset, InstrumentKey>;
-
-    fn states_by_filter<'a>(
-        &'a self,
-        filter: &InstrumentFilter<Self::Exchange, InstrumentKey>,
-    ) -> impl Iterator<
-        Item = &'a InstrumentState<Self::MarketState, Self::Exchange, Self::Asset, InstrumentKey>,
-    >
-    where
-        Self::MarketState: 'a,
-        Self::Exchange: 'a,
-        Self::Asset: 'a,
-        InstrumentKey: 'a;
-}
-
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct InstrumentStates<Market, ExchangeKey, AssetKey, InstrumentKey>(
     pub  IndexMap<

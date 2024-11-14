@@ -1,7 +1,7 @@
 use crate::v2::{
     engine::{
-        action::send_requests::SendRequestsOutput, execution_tx::ExecutionTxMap, Engine,
-        InstrumentStateManager,
+        action::send_requests::SendRequestsOutput, execution_tx::ExecutionTxMap,
+        state::order_manager::InFlightRequestRecorder, Engine,
     },
     order::{Order, RequestCancel, RequestOpen},
     risk::{RiskApproved, RiskManager, RiskRefused},
@@ -28,10 +28,12 @@ pub trait AlgoStrategy<ExchangeKey, InstrumentKey> {
     );
 }
 
+pub struct Default;
+
 impl<State, ExecutionTxs, Strategy, Risk, ExchangeKey, InstrumentKey>
     GenerateAlgoOrders<ExchangeKey, InstrumentKey> for Engine<State, ExecutionTxs, Strategy, Risk>
 where
-    State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
+    State: InFlightRequestRecorder<ExchangeKey, InstrumentKey>,
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
     Strategy: AlgoStrategy<ExchangeKey, InstrumentKey, State = State>,
     Risk: RiskManager<ExchangeKey, InstrumentKey, State = State>,
@@ -57,8 +59,8 @@ where
         let opens_refused = refused_opens.into_iter().collect();
 
         // Record in flight order requests
-        self.record_in_flight_cancels(cancels.sent.iter());
-        self.record_in_flight_opens(opens.sent.iter());
+        self.state.record_in_flight_cancels(cancels.sent.iter());
+        self.state.record_in_flight_opens(opens.sent.iter());
 
         GenerateAlgoOrdersOutput::new(cancels, cancels_refused, opens, opens_refused)
     }

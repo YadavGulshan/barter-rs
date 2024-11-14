@@ -1,7 +1,7 @@
 use crate::v2::{
     engine::{
         action::send_requests::SendRequestsOutput, command::InstrumentFilter,
-        execution_tx::ExecutionTxMap, Engine, InstrumentStateManager,
+        execution_tx::ExecutionTxMap, state::order_manager::InFlightRequestRecorder, Engine,
     },
     order::{Order, RequestCancel, RequestOpen},
 };
@@ -18,7 +18,7 @@ pub trait ClosePositions<ExchangeKey, InstrumentKey> {
     ) -> Self::Output;
 }
 
-pub trait CloseAllPositionsStrategy<ExchangeKey, InstrumentKey> {
+pub trait ClosePositionsStrategy<ExchangeKey, InstrumentKey> {
     type State;
 
     fn close_positions_requests(
@@ -34,9 +34,9 @@ pub trait CloseAllPositionsStrategy<ExchangeKey, InstrumentKey> {
 impl<State, ExecutionTxs, Strategy, Risk, ExchangeKey, InstrumentKey>
     ClosePositions<ExchangeKey, InstrumentKey> for Engine<State, ExecutionTxs, Strategy, Risk>
 where
-    State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
+    State: InFlightRequestRecorder<ExchangeKey, InstrumentKey>,
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
-    Strategy: CloseAllPositionsStrategy<ExchangeKey, InstrumentKey, State = State>,
+    Strategy: ClosePositionsStrategy<ExchangeKey, InstrumentKey, State = State>,
     ExchangeKey: Debug + Clone,
     InstrumentKey: Debug + Clone,
 {

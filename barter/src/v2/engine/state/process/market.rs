@@ -1,15 +1,16 @@
 use crate::v2::engine::{
-    state::{connectivity::Connection, EngineState},
-    InstrumentStateManager, Processor,
+    state::{connectivity::Connection, ConnectivityManager, EngineState, InstrumentManager},
+    Processor,
 };
 use barter_data::{event::MarketEvent, streams::consumer::MarketStreamEvent};
 use tracing::warn;
 
-impl<InstrumentKey, Kind, Market, Strategy, Risk, ExchangeKey, AssetKey>
+impl<Kind, Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
     Processor<&MarketStreamEvent<InstrumentKey, Kind>>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
 where
-    Self: InstrumentStateManager<InstrumentKey>,
+    Self:
+        ConnectivityManager<ExchangeKey> + InstrumentManager<ExchangeKey, AssetKey, InstrumentKey>,
     Market: for<'a> Processor<&'a MarketEvent<InstrumentKey, Kind>>,
     Strategy: for<'a> Processor<&'a MarketEvent<InstrumentKey, Kind>>,
     Risk: for<'a> Processor<&'a MarketEvent<InstrumentKey, Kind>>,
@@ -23,11 +24,12 @@ where
                     ?exchange,
                     "EngineState received MarketStream disconnected event"
                 );
-                self.state_mut(exchange).market_data = Connection::Reconnecting;
+                self.connectivity_mut(exchange).market_data = Connection::Reconnecting;
             }
             MarketStreamEvent::Item(event) => {
                 // Todo: set exchange ConnectivityState to healthy if unhealthy
-                self.state_mut(&event.instrument).market.process(event);
+
+                self.instrument_mut(&event.instrument).market.process(event);
                 self.strategy.process(event);
                 self.risk.process(event);
             }

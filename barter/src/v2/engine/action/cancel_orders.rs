@@ -3,10 +3,7 @@ use crate::v2::{
         action::send_requests::SendRequestsOutput,
         command::InstrumentFilter,
         execution_tx::ExecutionTxMap,
-        state::{
-            order_manager::{OrderManager, Orders},
-            StateManager,
-        },
+        state::order_manager::{InFlightRequestRecorder, OrderManager},
         Engine,
     },
     order::{Order, RequestCancel},
@@ -25,8 +22,7 @@ pub trait CancelOrders<ExchangeKey, InstrumentKey> {
 impl<State, ExecutionTxs, Strategy, Risk, ExchangeKey, InstrumentKey>
     CancelOrders<ExchangeKey, InstrumentKey> for Engine<State, ExecutionTxs, Strategy, Risk>
 where
-    State: StateManager<InstrumentKey, State = Orders<ExchangeKey, InstrumentKey>>,
-    State: InstrumentStateManager<InstrumentKey, Exchange = ExchangeKey>,
+    State: InFlightRequestRecorder<ExchangeKey, InstrumentKey>,
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
     ExchangeKey: Debug + Clone + PartialEq,
     InstrumentKey: Debug + Clone + PartialEq,
@@ -48,7 +44,7 @@ where
         let cancels = self.send_requests(requests);
 
         // Record in flight order requests
-        self.record_in_flight_cancels(&cancels.sent);
+        self.state.record_in_flight_cancels(&cancels.sent);
 
         cancels
     }
