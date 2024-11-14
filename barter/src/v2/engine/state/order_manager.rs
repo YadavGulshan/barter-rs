@@ -16,15 +16,25 @@ pub trait InFlightRequestRecorder<ExchangeKey, InstrumentKey> {
     fn record_in_flight_cancels<'a>(
         &mut self,
         requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestCancel>>,
-    ) {
-        requests.into_iter().for_each(Self::record_in_flight_cancel)
+    ) where
+        ExchangeKey: 'a,
+        InstrumentKey: 'a,
+    {
+        requests
+            .into_iter()
+            .for_each(|request| self.record_in_flight_cancel(request))
     }
 
     fn record_in_flight_opens<'a>(
         &mut self,
         requests: impl IntoIterator<Item = &'a Order<ExchangeKey, InstrumentKey, RequestOpen>>,
-    ) {
-        requests.into_iter().for_each(Self::record_in_flight_open)
+    ) where
+        ExchangeKey: 'a,
+        InstrumentKey: 'a,
+    {
+        requests
+            .into_iter()
+            .for_each(|request| self.record_in_flight_open(request))
     }
 
     fn record_in_flight_cancel(
@@ -90,6 +100,9 @@ impl<ExchangeKey, InstrumentKey> Default for Orders<ExchangeKey, InstrumentKey> 
 
 impl<ExchangeKey, InstrumentKey> InFlightRequestRecorder<ExchangeKey, InstrumentKey>
     for Orders<ExchangeKey, InstrumentKey>
+where
+    ExchangeKey: Debug + Clone,
+    InstrumentKey: Debug + Clone,
 {
     fn record_in_flight_cancel(
         &mut self,

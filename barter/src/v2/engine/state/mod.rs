@@ -43,27 +43,31 @@ pub trait AssetManager<AssetKey> {
     fn asset_mut(&mut self, key: &AssetKey) -> &mut AssetState;
 }
 
-pub trait InstrumentManager<ExchangeKey, AssetKey, InstrumentKey> {
+pub trait InstrumentManager<InstrumentKey> {
+    type ExchangeKey;
+    type AssetKey;
     type Market;
 
     fn instrument(
         &self,
         key: &InstrumentKey,
-    ) -> &InstrumentState<Self::Market, ExchangeKey, AssetKey, InstrumentKey>;
+    ) -> &InstrumentState<Self::Market, Self::ExchangeKey, Self::AssetKey, InstrumentKey>;
 
     fn instrument_mut(
         &mut self,
         key: &InstrumentKey,
-    ) -> &mut InstrumentState<Self::Market, ExchangeKey, AssetKey, InstrumentKey>;
+    ) -> &mut InstrumentState<Self::Market, Self::ExchangeKey, Self::AssetKey, InstrumentKey>;
 
     fn instruments<'a>(
         &'a self,
-        filter: &InstrumentFilter<ExchangeKey, InstrumentKey>,
-    ) -> impl Iterator<Item = &'a InstrumentState<Self::Market, ExchangeKey, AssetKey, InstrumentKey>>
+        filter: &InstrumentFilter<Self::ExchangeKey, InstrumentKey>,
+    ) -> impl Iterator<
+        Item = &'a InstrumentState<Self::Market, Self::ExchangeKey, Self::AssetKey, InstrumentKey>,
+    >
     where
         Self::Market: 'a,
-        ExchangeKey: PartialEq + 'a,
-        AssetKey: 'a,
+        Self::ExchangeKey: PartialEq + 'a,
+        Self::AssetKey: 'a,
         InstrumentKey: PartialEq + 'a;
 }
 
@@ -159,10 +163,11 @@ impl<Market, Strategy, Risk, ExchangeKey, InstrumentKey>
     }
 }
 
-impl<Market, Strategy, Risk, ExchangeKey, AssetKey>
-    InstrumentManager<ExchangeKey, AssetKey, InstrumentIndex>
+impl<Market, Strategy, Risk, ExchangeKey, AssetKey> InstrumentManager<InstrumentIndex>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentIndex>
 {
+    type ExchangeKey = ExchangeKey;
+    type AssetKey = AssetKey;
     type Market = Market;
 
     fn instrument(
@@ -214,10 +219,11 @@ impl<Market, Strategy, Risk, ExchangeKey, AssetKey>
     }
 }
 
-impl<Market, Strategy, Risk, ExchangeKey, AssetKey>
-    InstrumentManager<ExchangeKey, AssetKey, InstrumentNameInternal>
+impl<Market, Strategy, Risk, ExchangeKey, AssetKey> InstrumentManager<InstrumentNameInternal>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentNameInternal>
 {
+    type ExchangeKey = ExchangeKey;
+    type AssetKey = AssetKey;
     type Market = Market;
 
     fn instrument(

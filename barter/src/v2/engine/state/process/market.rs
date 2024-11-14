@@ -3,14 +3,14 @@ use crate::v2::engine::{
     Processor,
 };
 use barter_data::{event::MarketEvent, streams::consumer::MarketStreamEvent};
+use barter_instrument::exchange::ExchangeId;
 use tracing::warn;
 
 impl<Kind, Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
     Processor<&MarketStreamEvent<InstrumentKey, Kind>>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
 where
-    Self:
-        ConnectivityManager<ExchangeKey> + InstrumentManager<ExchangeKey, AssetKey, InstrumentKey>,
+    Self: ConnectivityManager<ExchangeId> + InstrumentManager<InstrumentKey, Market = Market>,
     Market: for<'a> Processor<&'a MarketEvent<InstrumentKey, Kind>>,
     Strategy: for<'a> Processor<&'a MarketEvent<InstrumentKey, Kind>>,
     Risk: for<'a> Processor<&'a MarketEvent<InstrumentKey, Kind>>,

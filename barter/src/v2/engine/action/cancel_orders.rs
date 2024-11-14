@@ -3,7 +3,10 @@ use crate::v2::{
         action::send_requests::SendRequestsOutput,
         command::InstrumentFilter,
         execution_tx::ExecutionTxMap,
-        state::order_manager::{InFlightRequestRecorder, OrderManager},
+        state::{
+            order_manager::{InFlightRequestRecorder, OrderManager},
+            InstrumentManager,
+        },
         Engine,
     },
     order::{Order, RequestCancel},
@@ -22,7 +25,8 @@ pub trait CancelOrders<ExchangeKey, InstrumentKey> {
 impl<State, ExecutionTxs, Strategy, Risk, ExchangeKey, InstrumentKey>
     CancelOrders<ExchangeKey, InstrumentKey> for Engine<State, ExecutionTxs, Strategy, Risk>
 where
-    State: InFlightRequestRecorder<ExchangeKey, InstrumentKey>,
+    State: InstrumentManager<InstrumentKey, ExchangeKey = ExchangeKey>
+        + InFlightRequestRecorder<ExchangeKey, InstrumentKey>,
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
     ExchangeKey: Debug + Clone + PartialEq,
     InstrumentKey: Debug + Clone + PartialEq,
@@ -35,7 +39,7 @@ where
     ) -> Self::Output {
         let requests = self
             .state
-            .states_by_filter(filter)
+            .instruments(filter)
             .flat_map(|state| state.orders.orders().filter_map(Order::as_request_cancel));
 
         // Bypass risk checks...

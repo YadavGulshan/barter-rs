@@ -9,17 +9,22 @@ use crate::v2::{
     execution::{manager::AccountStreamEvent, AccountEvent, AccountEventKind},
     Snapshot,
 };
+use barter_instrument::exchange::ExchangeId;
+use std::fmt::Debug;
 use tracing::{info, warn};
 
 impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
     Processor<&AccountStreamEvent<ExchangeKey, AssetKey, InstrumentKey>>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
 where
-    Self: ConnectivityManager<ExchangeKey>
+    Self: ConnectivityManager<ExchangeId>
         + AssetManager<AssetKey>
-        + InstrumentManager<ExchangeKey, AssetKey, InstrumentKey>,
+        + InstrumentManager<InstrumentKey, ExchangeKey = ExchangeKey, AssetKey = AssetKey>,
     Strategy: for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>,
     Risk: for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>,
+    ExchangeKey: Debug + Clone,
+    AssetKey: Debug,
+    InstrumentKey: Debug + Clone,
 {
     type Audit = ProcessAccountStreamEventAudit;
 

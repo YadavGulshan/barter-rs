@@ -3,42 +3,30 @@ use crate::v2::{
         action::{
             cancel_orders::CancelOrders,
             close_positions::{ClosePositions, ClosePositionsStrategy},
-            send_requests::SendRequestsOutput,
-            ActionOutput,
         },
         audit::{AuditEvent, Auditor},
-        command::{Command, InstrumentFilter},
-        error::{EngineError, RecoverableEngineError, UnrecoverableEngineError},
         execution_tx::ExecutionTxMap,
         state::{
-            instrument::{market_data::MarketDataState, InstrumentState},
-            order_manager::OrderManager,
+            instrument::market_data::MarketDataState,
+            order_manager::{InFlightRequestRecorder, OrderManager},
             trading_state_manager::TradingStateManager,
-            EngineState, IndexedEngineState,
+            InstrumentManager,
         },
     },
-    execution::{manager::AccountStreamEvent, ExecutionRequest},
-    order::{Order, RequestCancel, RequestOpen},
+    execution::manager::AccountStreamEvent,
     risk::RiskManager,
     strategy::Strategy,
     EngineEvent,
 };
 use audit::shutdown::ShutdownAudit;
 use barter_data::streams::consumer::MarketStreamEvent;
-use barter_instrument::{
-    asset::{name::AssetNameInternal, AssetIndex},
-    exchange::{ExchangeId, ExchangeIndex},
-    instrument::{name::InstrumentNameInternal, InstrumentIndex},
-};
 use barter_integration::{
     channel::{ChannelTxDroppable, Tx},
-    collection::none_one_or_many::NoneOneOrMany,
     Unrecoverable,
 };
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use std::fmt::Debug;
-use tracing::error;
 
 pub mod action;
 pub mod audit;
@@ -105,6 +93,8 @@ impl<
     for Engine<State, ExecutionTxs, Strategy, Risk>
 where
     State: TradingStateManager
+        + InstrumentManager<InstrumentKey, ExchangeKey = ExchangeKey>
+        + InFlightRequestRecorder<ExchangeKey, InstrumentKey>
         + for<'a> Processor<&'a MarketStreamEvent<InstrumentKey, MarketEventKind>>
         + for<'a> Processor<&'a AccountStreamEvent<ExchangeKey, AssetKey, InstrumentKey>>,
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
