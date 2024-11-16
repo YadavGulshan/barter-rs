@@ -1,13 +1,12 @@
 use crate::v2::engine::{
-    state::{connectivity::Connection, ConnectivityManager, EngineState, InstrumentStateManager},
+    state::{ConnectivityManager, EngineState, InstrumentStateManager},
     Processor,
 };
-use barter_data::{event::MarketEvent, streams::consumer::MarketStreamEvent};
+use barter_data::event::MarketEvent;
 use barter_instrument::exchange::ExchangeId;
-use tracing::warn;
 
 impl<Kind, Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
-    Processor<&MarketStreamEvent<InstrumentKey, Kind>>
+    Processor<&MarketEvent<InstrumentKey, Kind>>
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
 where
     Self: ConnectivityManager<ExchangeId> + InstrumentStateManager<InstrumentKey, Market = Market>,
@@ -17,23 +16,12 @@ where
 {
     type Audit = ProcessMarketStreamEventAudit;
 
-    fn process(&mut self, event: &MarketStreamEvent<InstrumentKey, Kind>) -> Self::Audit {
-        match event {
-            MarketStreamEvent::Reconnecting(exchange) => {
-                warn!(
-                    ?exchange,
-                    "EngineState received MarketStream disconnected event"
-                );
-                self.connectivity_mut(exchange).market_data = Connection::Reconnecting;
-            }
-            MarketStreamEvent::Item(event) => {
-                // Todo: set exchange ConnectivityState to healthy if unhealthy
+    fn process(&mut self, event: &MarketEvent<InstrumentKey, Kind>) -> Self::Audit {
+        // Todo: set exchange ConnectivityState to healthy if unhealthy
 
-                self.instrument_mut(&event.instrument).market.process(event);
-                self.strategy.process(event);
-                self.risk.process(event);
-            }
-        };
+        self.instrument_mut(&event.instrument).market.process(event);
+        self.strategy.process(event);
+        self.risk.process(event);
 
         ProcessMarketStreamEventAudit
     }

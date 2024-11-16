@@ -1,31 +1,32 @@
+use crate::v2::engine::action::generate_algo_orders::GenerateAlgoOrders;
+use crate::v2::engine::action::on_disconnect::OnDisconnectStrategy;
+use crate::v2::engine::action::ActionOutput;
+use crate::v2::engine::state::connectivity::Connection;
 use crate::v2::engine::state::order_manager::InFlightRequestRecorder;
-use crate::v2::engine::state::InstrumentStateManager;
+use crate::v2::engine::state::process::trading_state::ProcessTradingStateAudit;
+use crate::v2::engine::state::trading_state_manager::TradingState;
+use crate::v2::engine::state::{ConnectivityManager, InstrumentStateManager};
+use crate::v2::execution::AccountEvent;
 use crate::v2::{
     engine::{
-        action::{
-            close_positions::{ClosePositionsStrategy}
-        },
+        action::close_positions::ClosePositionsStrategy,
         audit::{AuditEvent, Auditor}
 
         ,
         execution_tx::ExecutionTxMap,
-        state::{
-            trading_state_manager::TradingStateManager
-        },
+        state::trading_state_manager::TradingStateManager,
     },
-    execution::manager::AccountStreamEvent
-    ,
-    strategy::Strategy,
+    execution::manager::AccountStreamEvent,
     EngineEvent,
 };
 use audit::shutdown::ShutdownAudit;
+use barter_data::event::MarketEvent;
 use barter_data::streams::consumer::MarketStreamEvent;
-use barter_integration::{
-    channel::{ChannelTxDroppable, Tx}
-
-};
+use barter_instrument::exchange::ExchangeId;
+use barter_integration::channel::{ChannelTxDroppable, Tx};
 use chrono::{DateTime, Utc};
 use std::fmt::Debug;
+use tracing::warn;
 
 pub mod action;
 pub mod audit;
@@ -76,7 +77,6 @@ pub struct Engine<State, ExecutionTxs, Strategy, Risk> {
     pub execution_txs: ExecutionTxs,
     pub strategy: Strategy,
     pub risk: Risk,
-    // pub actual_state:
 }
 
 impl<
@@ -91,13 +91,16 @@ impl<
 > Processor<EngineEvent<MarketEventKind, ExchangeKey, AssetKey, InstrumentKey>>
 for Engine<State, ExecutionTxs, Strategy, Risk>
 where
+    Self: GenerateAlgoOrders<ExchangeKey, InstrumentKey>,
     State: TradingStateManager
+        + ConnectivityManager<ExchangeId>
         + InstrumentStateManager<InstrumentKey, ExchangeKey = ExchangeKey>
         + InFlightRequestRecorder<ExchangeKey, InstrumentKey>
-        + for<'a> Processor<&'a MarketStreamEvent<InstrumentKey, MarketEventKind>>
-        + for<'a> Processor<&'a AccountStreamEvent<ExchangeKey, AssetKey, InstrumentKey>>,
+        + for<'a> Processor<&'a MarketEvent<InstrumentKey, MarketEventKind>>
+        + for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>,
     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
-    Strategy: ClosePositionsStrategy<ExchangeKey, InstrumentKey, State = State>,
+    Strategy: ClosePositionsStrategy<ExchangeKey, InstrumentKey, State = State>
+        + OnDisconnectStrategy<State, ExecutionTxs, Risk>,
     ExchangeKey: Debug + Clone + PartialEq,
     InstrumentKey: Debug + Clone + PartialEq,
 {
@@ -117,32 +120,49 @@ where
             EngineEvent::TradingStateUpdate(trading_state_update) => {
                 let x = self.state.process(*trading_state_update);
             }
-            EngineEvent::Account(account) => {
-                let x = self.state.process(account);
+            EngineEvent::Account(event) => {
+                let x = self.update_from_account(event);
             }
-            EngineEvent::Market(market) => {
-                self.state.process(market);
+            EngineEvent::Market(event) => {
+                let x = self.update_from_market(event);
             }
+        }
+
+        if let TradingState::Enabled = self.state.trading_state() {
+            let output = self.generate_algo_orders();
+
+            if let Some(unrecoverable) = output.unrecoverable_errors() {
+                // Audit::ShutdownWithOutput(ShutdownAudit::Error(event, unrecoverable), output)
+            } else {
+                // Audit::ProcessWithOutput(event, output)
+            }
+        } else {
+            // Audit::Process(event)
         }
 
         ProcessEngineEventAudit::Shutdown
     }
 }
 
-pub enum ProcessEngineEventAudit {
+pub enum ProcessEngineEventAudit<ExchangeKey, InstrumentKey, OnDisconnect> {
     Shutdown,
-    Action,
-    TradingState,
-    Account,
-    Market,
+    Action(ActionOutput<ExchangeKey, InstrumentKey>),
+    TradingState(ProcessTradingStateAudit),
+    Account(Option<OnDisconnect>),
+    Market(Option<OnDisconnect>),
 }
 
-impl<State, ExecutionTxs, StrategyT, Risk> Engine<State, ExecutionTxs, StrategyT, Risk> {
+
+
+pub struct ProcessMarketStreamEventAudit;
+pub struct ProcessAccountStreamEventAudit;
+
+impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, Risk> {
     pub fn new(
         clock: fn() -> DateTime<Utc>,
         state: State,
         execution_txs: ExecutionTxs,
-        strategy: StrategyT,
+        strategy: Strategy,
         risk: Risk,
     ) -> Self {
         Self {
@@ -159,6 +179,50 @@ impl<State, ExecutionTxs, StrategyT, Risk> Engine<State, ExecutionTxs, StrategyT
         let sequence = self.sequence;
         self.sequence += 1;
         sequence
+    }
+
+    pub enum UpdateFromAccountAudit {
+        OnDisconnect,
+        Process,
+    }
+
+    pub fn update_from_account<ExchangeKey, AssetKey, InstrumentKey>(
+        &mut self,
+        event: &AccountStreamEvent<ExchangeKey, AssetKey, InstrumentKey>
+    ) -> UpdateFromAccountAudit
+    where
+        State: ConnectivityManager<ExchangeId>
+            + for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>,
+        Strategy: OnDisconnectStrategy<State, ExecutionTxs, Risk>
+    {
+        match event {
+            AccountStreamEvent::Reconnecting(exchange) => {
+                warn!(%exchange, "EngineState received AccountStream disconnected event");
+                self.state.connectivity_mut(exchange).account = Connection::Reconnecting;
+                let x = Strategy::on_disconnect(self, *exchange);
+            }
+            AccountStreamEvent::Item(event) => {
+                let x = self.state.process(event);
+            }
+        }
+    }
+
+    pub fn update_from_market<InstrumentKey, Kind>(&mut self, event: &MarketStreamEvent<InstrumentKey, Kind>)
+    where
+        State: ConnectivityManager<ExchangeId>
+            + for<'a> Processor<&'a MarketEvent<InstrumentKey, Kind>>,
+        Strategy: OnDisconnectStrategy<State, ExecutionTxs, Risk>,
+    {
+        match event {
+            MarketStreamEvent::Reconnecting(exchange) => {
+                warn!(%exchange, "EngineState received MarketStream disconnected event");
+                self.state.connectivity_mut(exchange).market_data = Connection::Reconnecting;
+                let x = Strategy::on_disconnect(self, *exchange);
+            }
+            MarketStreamEvent::Item(event) => {
+                let x = self.state.process(event);
+            }
+        }
     }
 }
 
@@ -186,90 +250,90 @@ where
     }
 }
 
-impl<ExecutionTxs, MarketState, StrategyT, Risk, ExchangeKey, AssetKey, InstrumentKey>
-    Processor<EngineEvent<MarketState::EventKind, ExchangeKey, AssetKey, InstrumentKey>>
-    for Engine<
-        EngineState<
-            MarketState,
-            StrategyT::State,
-            Risk::State,
-            ExchangeKey,
-            AssetKey,
-            InstrumentKey,
-        >,
-        ExecutionTxs,
-        StrategyT,
-        Risk,
-    >
-where
-    ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
-    MarketState: MarketDataState<InstrumentKey>,
-    StrategyT: Strategy<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
-    StrategyT::State: for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>
-        + for<'a> Processor<&'a MarketEvent<InstrumentKey, MarketState::EventKind>>,
-    Risk: RiskManager<ExchangeKey, AssetKey>,
-    Risk::State: for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>
-        + for<'a> Processor<&'a MarketEvent<InstrumentKey, MarketState::EventKind>>,
-    ExchangeKey: Debug + Clone,
-    AssetKey: Debug,
-    InstrumentKey: Debug + Clone,
-    EngineState<MarketState, StrategyT::State, Risk::State, ExchangeKey, AssetKey, InstrumentKey>:
-        StateManager<ExchangeId, State = ConnectivityState>
-            + StateManager<AssetKey, State = AssetState>
-            + StateManager<
-                InstrumentKey,
-                State = InstrumentState<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
-            >,
-{
-    type Audit = Audit<
-        EngineState<
-            MarketState,
-            StrategyT::State,
-            Risk::State,
-            ExchangeKey,
-            AssetKey,
-            InstrumentKey,
-        >,
-        EngineEvent<MarketState::EventKind, ExchangeKey, AssetKey, InstrumentKey>,
-        ExecutionRequestAudit<ExchangeKey, InstrumentKey>,
-    >;
-
-    fn process(
-        &mut self,
-        event: EngineEvent<MarketState::EventKind, ExchangeKey, AssetKey, InstrumentKey>,
-    ) -> Self::Audit {
-        match &event {
-            EngineEvent::Shutdown => return Audit::Shutdown(ShutdownAudit::Commanded(event)),
-            EngineEvent::Command(command) => {
-                let output = self.action(command);
-
-                return if let Some(unrecoverable) = output.unrecoverable_errors() {
-                    Audit::ShutdownWithOutput(ShutdownAudit::Error(event, unrecoverable), output)
-                } else {
-                    Audit::ProcessWithOutput(event, output)
-                };
-            }
-            EngineEvent::TradingStateUpdate(trading_state) => {
-                self.state.update_from_trading_state_update(trading_state);
-            }
-            EngineEvent::Account(account) => {
-                self.state.update_from_account(account);
-            }
-            EngineEvent::Market(market) => {
-                self.state.update_from_market(market);
-            }
-        };
-
-        if let TradingState::Enabled = self.state.trading {
-            let output = self.trade();
-
-            if let Some(unrecoverable) = output.unrecoverable_errors() {
-                Audit::ShutdownWithOutput(ShutdownAudit::Error(event, unrecoverable), output)
-            } else {
-                Audit::ProcessWithOutput(event, output)
-            }
-        } else {
-            Audit::Process(event)
-        }
-    }
-}
+// impl<ExecutionTxs, MarketState, StrategyT, Risk, ExchangeKey, AssetKey, InstrumentKey>
+//     Processor<EngineEvent<MarketState::EventKind, ExchangeKey, AssetKey, InstrumentKey>>
+//     for Engine<
+//         EngineState<
+//             MarketState,
+//             StrategyT::State,
+//             Risk::State,
+//             ExchangeKey,
+//             AssetKey,
+//             InstrumentKey,
+//         >,
+//         ExecutionTxs,
+//         StrategyT,
+//         Risk,
+//     >
+// where
+//     ExecutionTxs: ExecutionTxMap<ExchangeKey, InstrumentKey>,
+//     MarketState: MarketDataState<InstrumentKey>,
+//     StrategyT: Strategy<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
+//     StrategyT::State: for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>
+//         + for<'a> Processor<&'a MarketEvent<InstrumentKey, MarketState::EventKind>>,
+//     Risk: RiskManager<ExchangeKey, AssetKey>,
+//     Risk::State: for<'a> Processor<&'a AccountEvent<ExchangeKey, AssetKey, InstrumentKey>>
+//         + for<'a> Processor<&'a MarketEvent<InstrumentKey, MarketState::EventKind>>,
+//     ExchangeKey: Debug + Clone,
+//     AssetKey: Debug,
+//     InstrumentKey: Debug + Clone,
+//     EngineState<MarketState, StrategyT::State, Risk::State, ExchangeKey, AssetKey, InstrumentKey>:
+//         StateManager<ExchangeId, State = ConnectivityState>
+//             + StateManager<AssetKey, State = AssetState>
+//             + StateManager<
+//                 InstrumentKey,
+//                 State = InstrumentState<MarketState, ExchangeKey, AssetKey, InstrumentKey>,
+//             >,
+// {
+//     type Audit = Audit<
+//         EngineState<
+//             MarketState,
+//             StrategyT::State,
+//             Risk::State,
+//             ExchangeKey,
+//             AssetKey,
+//             InstrumentKey,
+//         >,
+//         EngineEvent<MarketState::EventKind, ExchangeKey, AssetKey, InstrumentKey>,
+//         ExecutionRequestAudit<ExchangeKey, InstrumentKey>,
+//     >;
+//
+//     fn process(
+//         &mut self,
+//         event: EngineEvent<MarketState::EventKind, ExchangeKey, AssetKey, InstrumentKey>,
+//     ) -> Self::Audit {
+//         match &event {
+//             EngineEvent::Shutdown => return Audit::Shutdown(ShutdownAudit::Commanded(event)),
+//             EngineEvent::Command(command) => {
+//                 let output = self.action(command);
+//
+//                 return if let Some(unrecoverable) = output.unrecoverable_errors() {
+//                     Audit::ShutdownWithOutput(ShutdownAudit::Error(event, unrecoverable), output)
+//                 } else {
+//                     Audit::ProcessWithOutput(event, output)
+//                 };
+//             }
+//             EngineEvent::TradingStateUpdate(trading_state) => {
+//                 self.state.update_from_trading_state_update(trading_state);
+//             }
+//             EngineEvent::Account(account) => {
+//                 self.state.update_from_account(account);
+//             }
+//             EngineEvent::Market(market) => {
+//                 self.state.update_from_market(market);
+//             }
+//         };
+//
+//         if let TradingState::Enabled = self.state.trading {
+//             let output = self.trade();
+//
+//             if let Some(unrecoverable) = output.unrecoverable_errors() {
+//                 Audit::ShutdownWithOutput(ShutdownAudit::Error(event, unrecoverable), output)
+//             } else {
+//                 Audit::ProcessWithOutput(event, output)
+//             }
+//         } else {
+//             Audit::Process(event)
+//         }
+//     }
+// }

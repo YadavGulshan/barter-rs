@@ -7,6 +7,7 @@ use crate::v2::{
     execution::ExecutionRequest,
     order::Order,
 };
+use barter_integration::collection::one_or_many::OneOrMany;
 use barter_integration::{channel::Tx, collection::none_one_or_many::NoneOneOrMany, Unrecoverable};
 use derive_more::Constructor;
 use itertools::Itertools;
@@ -92,6 +93,25 @@ impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, 
 pub struct SendRequestsOutput<ExchangeKey, InstrumentKey, Kind> {
     pub sent: NoneOneOrMany<Order<ExchangeKey, InstrumentKey, Kind>>,
     pub errors: NoneOneOrMany<(Order<ExchangeKey, InstrumentKey, Kind>, EngineError)>,
+}
+
+impl<ExchangeKey, InstrumentKey, Kind> SendRequestsOutput<ExchangeKey, InstrumentKey, Kind> {
+    pub fn unrecoverable_errors(&self) -> Option<OneOrMany<UnrecoverableEngineError>> {
+        // Send requests output contains no unrecoverable errors
+        if !self.is_unrecoverable() {
+            return None
+        }
+
+        Some(
+            self
+                .errors
+                .iter()
+                .filter_map(|(order, error)| match error {
+                    EngineError::Unrecoverable(error) => Some(error.clone())
+                })
+                .collect()
+        )
+    }
 }
 
 impl<ExchangeKey, InstrumentKey, Kind> Unrecoverable

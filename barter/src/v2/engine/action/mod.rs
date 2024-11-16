@@ -21,6 +21,7 @@ pub mod cancel_orders;
 pub mod close_positions;
 pub mod generate_algo_orders;
 pub mod send_requests;
+pub mod on_disconnect;
 
 impl<State, ExecutionTxs, Strategy, Risk> Engine<State, ExecutionTxs, Strategy, Risk> {
     pub fn action<ExchangeKey, InstrumentKey>(

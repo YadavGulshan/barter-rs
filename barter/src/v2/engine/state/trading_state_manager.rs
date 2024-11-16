@@ -8,7 +8,7 @@ pub trait TradingStateManager
 where
     Self: Processor<TradingState, Audit = ProcessTradingStateAudit>,
 {
-    fn state(&self) -> TradingState;
+    fn trading_state(&self) -> TradingState;
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Deserialize, Serialize)]
@@ -20,7 +20,7 @@ pub enum TradingState {
 impl<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey> TradingStateManager
     for EngineState<Market, Strategy, Risk, ExchangeKey, AssetKey, InstrumentKey>
 {
-    fn state(&self) -> TradingState {
+    fn trading_state(&self) -> TradingState {
         self.trading
     }
 }

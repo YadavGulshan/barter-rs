@@ -9,6 +9,10 @@ pub enum ShutdownAudit<Event> {
     Commanded(Event),
 }
 
+pub enum ShutdownAuditNew {
+    Command
+}
+
 impl<State, Event, Output> From<ShutdownAudit<Event>> for Audit<State, Event, Output> {
     fn from(value: ShutdownAudit<Event>) -> Self {
         Self::Shutdown(value)
